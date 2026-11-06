@@ -87,6 +87,20 @@ html, body {
   color: #fff;
 }
 
+/* Experimental-feature warning, shown while "Ask the Dossier" is active */
+.experimental-warning {
+  max-width: 860px;
+  margin: 0 auto 10px;
+  padding: 7px 16px;
+  border: 1.5px solid var(--gold);
+  background: var(--amber-badge);
+  color: var(--amber-ink);
+  border-radius: 10px;
+  font-size: 13.5px;
+  font-weight: 600;
+  text-align: center;
+}
+
 .search-row {
   display: flex;
   gap: 10px;

@@ -80,6 +80,7 @@ function setMode(mode) {
     p.classList.toggle('active', active);
     p.setAttribute('aria-selected', String(active));
   });
+  document.getElementById('experimental-warning').hidden = mode !== 'dossier';
   el.input.placeholder = MODES[mode].placeholder;
   el.helper.innerHTML = `<em>${MODES[mode].helper}</em>`;
   el.summary.hidden = true;
