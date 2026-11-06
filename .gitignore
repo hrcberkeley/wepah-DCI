@@ -1,0 +1,10 @@
+.DS_Store
+ingestion/.venv/
+ingestion/.cache/
+ingestion/__pycache__/
+node_modules/
+.zcode-site/
+raw_pdfs/
+dist_data/
+GetDocument.aspx
+.zcode-site.json

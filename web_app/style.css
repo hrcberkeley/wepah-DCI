@@ -101,6 +101,18 @@ a { color: inherit; }
 
 .masthead { transition: max-width 0.45s var(--ease-fold); }
 
+/* Small-caps studio line sitting above the wordmark */
+.masthead-kicker {
+  margin: 0 0 2px;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 500;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--ink-2);
+}
+body.compact .masthead-kicker { display: none; }
+
 .masthead-title {
   margin: 0;
   font-family: var(--font-display);
@@ -135,10 +147,18 @@ a { color: inherit; }
   opacity: 1;
   transition: max-height 0.4s var(--ease-fold), opacity 0.25s ease, margin 0.4s var(--ease-fold);
 }
-.masthead-tagline {
-  margin: 14px 0 0;
+/* The nickname rides directly under the wordmark, its own line */
+.masthead-nickname {
+  margin: 12px 0 0;
   font-family: var(--font-serif);
   font-size: 17.5px;
+  color: var(--ink);
+}
+.masthead-nickname em { font-style: italic; }
+.masthead-tagline {
+  margin: 6px 0 0;
+  font-family: var(--font-serif);
+  font-size: 15px;
   color: var(--ink-2);
 }
 .masthead-tagline em { font-style: italic; color: var(--ink); }
@@ -415,6 +435,7 @@ body.compact .experimental-warning { flex: none; padding: 4px 10px; font-size: 9
 
 .left-pane {
   min-width: 0;
+  min-height: 0;   /* grid item floor: lets overflow-y engage instead of stretching the row */
   overflow-y: auto;
   border-right: 1px solid var(--line);
   padding-bottom: 48px;
@@ -707,6 +728,7 @@ mark.exact-hit {
 
 .right-pane {
   min-width: 0;
+  min-height: 0;   /* same grid-item floor for the stage's scroll container */
   display: flex;
   flex-direction: column;
   background: var(--paper-deep);

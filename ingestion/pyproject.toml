@@ -1,0 +1,15 @@
+[project]
+name = "ingestion"
+version = "0.1.0"
+description = "Legal Dossier corpus builder: docling OCR -> embeddings -> KMeans -> DuckDB Parquet"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "docling[ocrmac]>=2.15",
+    "duckdb>=1.1",
+    "sentence-transformers>=3.0",
+    "scikit-learn>=1.5",
+    "pillow>=10.0",
+    "pypdfium2>=4.30",
+    "huggingface_hub>=0.26",
+    "pyarrow>=17.0",
+]
