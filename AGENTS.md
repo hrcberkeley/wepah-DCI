@@ -21,14 +21,13 @@ project-root/
 │   ├── corpus.parquet         # Sorted by cluster_id with fixed ROW_GROUP_SIZE
 │   ├── centroids.json         # K-means cluster centers for zero-download browser routing
 │   └── pdfs/                  # Web-optimized copies of raw_pdfs for PDF.js range streaming
-└── web_app/                   # Static Vanilla JS / Vite frontend (zero backend required)
-    ├── index.html
-    ├── style.css
-    └── src/
-        ├── main.js            # UI controller & progressive disclosure state machine
-        ├── db_client.js       # DuckDB-Wasm + HF Datasets Server hybrid query engine
-        ├── verifier.js        # Deterministic quote-grounding verification gate
-        └── pdf_stage.js       # PDF.js renderer with normalized SVG bounding-box overlays
+├── index.html                 # Static Vanilla JS frontend at repo root (GitHub Pages)
+├── style.css
+├── src/
+│   ├── main.js                # UI controller & progressive disclosure state machine
+│   ├── db_client.js           # DuckDB-Wasm + HF Datasets Server hybrid query engine
+│   ├── verifier.js            # Deterministic quote-grounding verification gate
+│   └── pdf_stage.js           # PDF.js renderer with normalized SVG bounding-box overlays
 ```
 
 ---
@@ -132,7 +131,7 @@ Once the ingestion script finishes generating `dist_data/`, push the dataset and
 
 ---
 
-## 4. PHASE 2: ZERO-DOWNLOAD HYBRID QUERY ENGINE (`web_app/src/db_client.js`)
+## 4. PHASE 2: ZERO-DOWNLOAD HYBRID QUERY ENGINE (`src/db_client.js`)
 
 The browser must NEVER download `corpus.parquet` in full. Implement three specific data access methods in `db_client.js`:
 
