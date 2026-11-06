@@ -22,12 +22,12 @@ export function isReady() {
 
 function workerSource() {
   return `
-    import { AutoTokenizer, AutoModelForSequenceClassification } from "${TRANSFORMERS_URL}";
     let tok = null, model = null;
     self.onmessage = async ({ data }) => {
       const { id, op, payload } = data;
       try {
         if (op === 'init') {
+          const { AutoTokenizer, AutoModelForSequenceClassification } = await import("${TRANSFORMERS_URL}");
           tok = await AutoTokenizer.from_pretrained(payload.model);
           // WebGPU fp16 scores pairs ~10x faster than WASM but can emit NaN logits,
           // or finite-but-degraded ones, for this classifier on some driver stacks.
@@ -113,6 +113,13 @@ function ensureWorker() {
     if (kind === 'done') p.resolve(data);
     else p.reject(new Error(data.error));
   };
+  _worker.onerror = (event) => {
+    const error = new Error(event.message || 'Passage ranking stopped unexpectedly.');
+    for (const pending of _pending.values()) pending.reject(error);
+    _pending.clear();
+    _worker.terminate();
+    _worker = null;
+  };
   return _worker;
 }
 
@@ -133,7 +140,13 @@ export async function ensureReady(onProgress) {
       _ready = true;
     })();
   }
-  await _initPromise;
+  try {
+    await _initPromise;
+  } catch (error) {
+    _initPromise = null;
+    _ready = false;
+    throw error;
+  }
 }
 
 /**

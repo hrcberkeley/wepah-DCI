@@ -325,6 +325,7 @@ async function renderDossier(query, rows) {
   const gpuOK = await answerEngine.webGPUSupported();
   const engineOn = answerEngine.optedIn() && gpuOK;
   let claims = null;
+  let usedModel = false;
 
   if (engineOn) {
     try {
@@ -336,27 +337,28 @@ async function renderDossier(query, rows) {
       setStatus('Reading the record and writing a cited answer…', true);
       const raw = await answerEngine.generateClaims(query, rows);
       claims = gateClaims(raw, rows);
+      usedModel = claims.length > 0;
     } catch (err) {
       console.warn('Answering helper unavailable; showing extracted key passages instead.', err);
       claims = null;
     }
   }
 
-  // Extractive fallback: zero-download, deterministic — also the setup-offer carrier.
+  // Extractive fallback: deterministic and available without another download.
   if (!claims || !claims.length) {
-    claims = await extractiveClaims(query, rows);
+    claims = extractiveClaims(query, rows);
   }
 
   renderSummary(query, claims, rows, {
-    title: engineOn ? 'Written Answer' : 'Extracted Key Passages',
-    offerSetup: gpuOK && !answerEngine.optedIn(),
-    onEnableEngine: gpuOK && !answerEngine.optedIn()
+    title: usedModel ? 'Written Answer' : 'Extracted Key Passages',
+    offerSetup: gpuOK && !usedModel,
+    onEnableEngine: gpuOK && !usedModel
       ? () => renderDossier(query, rows)
       : null,
   });
 
   setStatus(claims.length
-    ? (engineOn
+    ? (usedModel
       ? 'Written answer below — every line cites the page it came from.'
       : 'Summary prepared below — every line cites the page it came from.')
     : 'No matching passages were found for that question.', false);
@@ -366,13 +368,25 @@ async function renderDossier(query, rows) {
 /** Mandatory verification gate (§5.4.4): discard every claim that is not verbatim-grounded. */
 function gateClaims(rawClaims, rows) {
   const passageById = new Map(rows.map((r) => [r.passage_id, r]));
-  return verifier.verifyClaims(rawClaims, passageById)
-    .map((c) => ({ ...c, passage: passageById.get(c.passage_id) }));
+  const verified = verifier.verifyClaims(rawClaims, passageById)
+    .filter((claim) => verifier.normalizeWhitespace(claim.statement));
+  const distinct = [];
+  for (const claim of verified) {
+    const statement = verifier.normalizeWhitespace(claim.statement).toLowerCase();
+    const duplicateIndex = distinct.findIndex((prior) => {
+      const other = verifier.normalizeWhitespace(prior.statement).toLowerCase();
+      return statement.includes(other) || other.includes(statement);
+    });
+    if (duplicateIndex < 0) distinct.push(claim);
+    else if (statement.length > distinct[duplicateIndex].statement.length) distinct[duplicateIndex] = claim;
+  }
+  return distinct.map((c) => ({ ...c, passage: passageById.get(c.passage_id) }));
 }
 
-/** One exact sentence per document: the one closest to the question. */
-async function extractiveClaims(query, rows) {
-  const qv = await db.embedQuery(query);
+/** One exact sentence per document, ranked by question-word overlap. */
+function extractiveClaims(query, rows) {
+  const words = [...new Set((query.toLowerCase().match(/[a-z0-9]{4,}/g) || [])
+    .filter((word) => !['what', 'when', 'where', 'which', 'would', 'could', 'should', 'about', 'have', 'from', 'with', 'that', 'this'].includes(word)))];
   const byDoc = new Map();
   for (const row of rows) {
     if (!byDoc.has(row.doc_id)) byDoc.set(row.doc_id, []);
@@ -385,14 +399,14 @@ async function extractiveClaims(query, rows) {
     for (const row of docRows) {
       const sentences = verifier.sentenceCandidates(row.passage_text);
       const candidates = sentences.length ? sentences : [verifier.normalizeWhitespace(row.passage_text)];
-      const vecs = await Promise.all(candidates.map((s) => db.embedRaw(s)));
-      for (let i = 0; i < candidates.length; i++) {
-        const sim = dot(qv, vecs[i]);
-        if (!best || sim > best.sim) {
+      for (const sentence of candidates) {
+        const lower = sentence.toLowerCase();
+        const relevance = words.reduce((score, word) => score + (lower.includes(word) ? 1 : 0), 0);
+        if (!best || relevance > best.relevance) {
           best = {
-            sim,
-            statement: candidates[i],
-            verbatim_quote: candidates[i],
+            relevance,
+            statement: sentence,
+            verbatim_quote: sentence,
             passage_id: row.passage_id,
             passage: row,
           };
@@ -406,12 +420,6 @@ async function extractiveClaims(query, rows) {
   const passageById = new Map(rows.map((r) => [r.passage_id, r]));
   return verifier.verifyClaims(claims, passageById)
     .map((c) => ({ ...c, passage: passageById.get(c.passage_id) }));
-}
-
-function dot(a, b) {
-  let s = 0;
-  for (let i = 0; i < a.length; i++) s += a[i] * b[i];
-  return s;
 }
 
 function renderSummary(query, claims, rows, { offerSetup = false, onEnableEngine = null, title = 'Extracted Key Passages' } = {}) {
@@ -451,10 +459,12 @@ function renderSummary(query, claims, rows, { offerSetup = false, onEnableEngine
     const chip = document.createElement('button');
     chip.type = 'button';
     chip.className = 'setup-chip';
-    chip.textContent = 'Get full written answers — one-time setup download, saved on this device';
+    chip.textContent = answerEngine.optedIn()
+      ? 'Try the written answer again'
+      : 'Get full written answers — one-time setup download, saved on this device';
     // The size depends on which model tier this machine gets; fill it in when known.
     answerEngine.estimateSetupGB().then((gb) => {
-      if (gb) chip.textContent = `Get full written answers — one-time ~${gb} GB setup, saved on this device`;
+      if (gb && !answerEngine.optedIn()) chip.textContent = `Get full written answers — one-time ~${gb} GB setup, saved on this device`;
     }).catch(() => {});
     chip.addEventListener('click', async () => {
       answerEngine.optIn();

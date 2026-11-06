@@ -40,7 +40,7 @@ uv run python build_corpus.py --verify-only
 
 # 2. Serve and open
 uv run python devserver.py 8410
-# → http://127.0.0.1:8410/web_app/
+# → http://127.0.0.1:8410/
 ```
 
 `devserver.py` is a plain static server with the extras the zero-download design needs:
@@ -49,11 +49,11 @@ HTTP **206 Partial Content** support, `Accept-Ranges: bytes`, and CORS expose-he
 
 ## Point the frontend at Hugging Face (zero-local-data mode) — ACTIVE
 
-`web_app/src/db_client.js` ships configured for the live dataset:
+`src/db_client.js` uses the live dataset:
 
 ```js
 export const CONFIG = {
-  HF_DATASET_REPO: 'kolenyo/MS_Datacenter',  // '' = stream from local /dist_data
+  HF_DATASET_REPO: 'kolenyo/MS_Datacenter',
   ...
 };
 ```

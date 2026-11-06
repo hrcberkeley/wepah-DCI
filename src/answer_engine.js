@@ -18,6 +18,7 @@
 
 const WEBLLM_URL = 'https://esm.run/@mlc-ai/web-llm@0.2.87';
 const STORAGE_KEY = 'wehpah-answer-engine-enabled';
+const WORKING_MODEL_KEY = 'wehpah-answer-engine-working-model';
 
 // Prebuilt WebLLM models, best-first. approxGB is the one-time download size
 // shown in the UI; MLC publishes VRAM lower bounds of ~3.9 / ~2.2 / ~1.6 GB.
@@ -29,6 +30,12 @@ const MODEL_TIERS = [
 
 /** Pick the tier to TRY FIRST on this machine (a failed init still retries smaller). */
 async function pickStartTier() {
+  // A successful smaller tier should load directly on subsequent visits.
+  try {
+    const prior = localStorage.getItem(WORKING_MODEL_KEY);
+    const priorIndex = MODEL_TIERS.findIndex((tier) => tier.id === prior);
+    if (priorIndex >= 0) return priorIndex;
+  } catch { /* storage can be unavailable in private browsing */ }
   // navigator.deviceMemory is capped at 8 (meaning "8 GB or more"), so any
   // reported value below 8 identifies a genuinely small machine.
   const mem = Number(navigator.deviceMemory) || null;
@@ -70,17 +77,6 @@ function clip(text, max = 900) {
   return t.length > max ? `${t.slice(0, max)}…` : t;
 }
 
-/** Markdown tables confuse small models — flatten pipes into readable dashes. */
-function flatten(text, max = 900) {
-  return clip(
-    String(text ?? '')
-      .replace(/\s*\|\s*/g, ' — ')
-      .replace(/\n{2,}/g, '\n')
-      .trim(),
-    max
-  );
-}
-
 let _worker = null;
 let _seq = 0;
 const _pending = new Map();
@@ -116,12 +112,14 @@ export function isReady() {
 // ---------- worker plumbing ----------
 function workerSource() {
   return `
-    import { CreateMLCEngine } from "${WEBLLM_URL}";
     let engine = null;
     self.onmessage = async ({ data }) => {
       const { id, op, payload } = data;
       try {
         if (op === 'init') {
+          // Keep import failures inside the request/response protocol. A failed
+          // top-level import otherwise kills the worker and leaves the UI waiting.
+          const { CreateMLCEngine } = await import("${WEBLLM_URL}");
           engine = await CreateMLCEngine(payload.modelId, {
             initProgressCallback: (r) =>
               self.postMessage({ id, kind: 'progress', text: r.text ?? '', progress: r.progress ?? 0 }),
@@ -133,6 +131,7 @@ function workerSource() {
             temperature: 0.2,
             max_tokens: payload.maxTokens ?? 700,
             response_format: payload.responseFormat,
+            extra_body: { enable_thinking: false },
           });
           self.postMessage({ id, kind: 'done', content: res.choices?.[0]?.message?.content ?? '' });
         }
@@ -161,6 +160,20 @@ function ensureWorker() {
     if (kind === 'done') p.resolve(data);
     else p.reject(new Error(data.error));
   };
+  _worker.onerror = (event) => {
+    const error = new Error(event.message || 'The answering helper stopped unexpectedly.');
+    for (const pending of _pending.values()) pending.reject(error);
+    _pending.clear();
+    _worker.terminate();
+    _worker = null;
+  };
+  _worker.onmessageerror = () => {
+    const error = new Error('The answering helper could not return its result.');
+    for (const pending of _pending.values()) pending.reject(error);
+    _pending.clear();
+    _worker.terminate();
+    _worker = null;
+  };
   return _worker;
 }
 
@@ -182,6 +195,7 @@ export async function ensureReady(onProgress) {
         try {
           await call('init', { modelId: MODEL_TIERS[idx].id }, onProgress);
           _modelId = MODEL_TIERS[idx].id;
+          try { localStorage.setItem(WORKING_MODEL_KEY, _modelId); } catch { /* private mode */ }
           _ready = true;
           return;
         } catch (err) {
@@ -194,7 +208,14 @@ export async function ensureReady(onProgress) {
       }
     })();
   }
-  await _initPromise;
+  try {
+    await _initPromise;
+  } catch (error) {
+    // A later search or explicit retry must be able to start a fresh attempt.
+    _initPromise = null;
+    _ready = false;
+    throw error;
+  }
 }
 
 // ---------- claim generation ----------
@@ -220,7 +241,7 @@ const CLAIMS_SCHEMA = {
 function buildMessages(question, rows) {
   const excerpts = rows
     .map((r, i) =>
-      `[${i + 1}] passage_id=${r.passage_id} (from "${r.doc_title}", page ${r.page_number})\n"""${flatten(r.passage_text)}"""`
+      `[${i + 1}] passage_id=${r.passage_id} (from "${r.doc_title}", page ${r.page_number})\n"""${clip(r.passage_text)}"""`
     )
     .join('\n\n');
 
