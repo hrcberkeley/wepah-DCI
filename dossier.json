@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "title": "San Jose Data Center",
+  "description": "CEC docket 19-SPPE-04",
+  "document_count": 283,
+  "passage_count": 93167,
+  "model_id": "Xenova/bge-small-en-v1.5",
+  "dimensions": 384,
+  "config": "default",
+  "split": "train",
+  "corpus_path": "corpus.parquet",
+  "centroids_path": "centroids.json",
+  "pdfs_path": "pdfs"
+}

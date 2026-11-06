@@ -111,6 +111,22 @@ finite-but-degraded fp16 logits fail it and fall back to WASM q8), table-cell fr
 deadlocks under concurrent queries). If the reranker can't load or score, the pool's TF
 order is used directly.
 
+## Open another dossier
+
+The cover's dossier selector accepts a public Hugging Face dataset URL or `owner/name`.
+Compatible repositories include `dossier.json`, `centroids.json`, `corpus.parquet`,
+and `pdfs/{doc_id}.pdf`. The manifest has `schema_version: 1`, title, description,
+document and passage counts, model ID (`Xenova/bge-small-en-v1.5`), dimensions (`384`),
+config/split, and paths to those three assets. The existing Parquet column contract
+in `AGENTS.md` still applies. The app checks the manifest and centroid dimensions
+before switching; unsupported datasets leave the current dossier open.
+
+Run ingestion with `--title "My Dossier" --description "Short description"` to write
+the manifest alongside the corpus, then upload the entire `dist_data/` folder.
+San Jose Data Center remains the built-in default. Its manifest is bundled with
+the website; to make its HF repository selectable by URL, upload `dossier.json`
+to `kolenyo/MS_Datacenter` with a write-scoped token.
+
 ## Verification status (§6 checklist)
 
 | Check | Status |

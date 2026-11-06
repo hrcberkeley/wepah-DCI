@@ -12,6 +12,7 @@ import * as verifier from './verifier.js';
 import * as pdfStage from './pdf_stage.js';
 import * as answerEngine from './answer_engine.js';
 import * as reranker from './reranker.js';
+import { DEFAULT_REPO, parseRepository, validateDossier, loadDossier } from './dossier.js';
 
 // §5.2 The Pedagogical Mode Switcher
 const MODES = {
@@ -37,6 +38,10 @@ const state = {
   query: '',
   passages: new Map(),   // passage_id -> row (for citation chips)
   activeCard: null,
+  dossier: null,
+  repository: DEFAULT_REPO,
+  searching: false,
+  switching: false,
 };
 
 const el = {
@@ -57,6 +62,41 @@ async function boot() {
   el.summary = $('dossier-summary');
   el.count = $('results-count');
   el.expand = $('expand-header');
+  const dossierToggle = $('dossier-toggle');
+  const dossierPanel = $('dossier-panel');
+  const dossierError = $('dossier-error');
+  const showPanel = (show) => {
+    dossierPanel.hidden = !show;
+    dossierToggle.setAttribute('aria-expanded', String(show));
+    if (show) {
+      const bottom = dossierToggle.getBoundingClientRect().bottom + 8;
+      dossierPanel.style.setProperty('--dossier-panel-top', `${Math.max(12, Math.min(bottom, window.innerHeight - 290))}px`);
+      $('dossier-url').focus();
+    }
+  };
+  dossierToggle.addEventListener('click', () => showPanel(dossierPanel.hidden));
+  $('dossier-form').addEventListener('submit', async (event) => {
+    event.preventDefault();
+    if (state.searching) return;
+    state.switching = true;
+    dossierError.hidden = true;
+    const submit = $('dossier-form').querySelector('button[type="submit"]');
+    submit.disabled = true;
+    el.button.disabled = true;
+    try {
+      const repo = parseRepository($('dossier-url').value);
+      const manifest = repo === DEFAULT_REPO ? validateDossier(await (await fetch('./dossier.json')).json()) : await loadDossier(repo);
+      await db.openDossier(repo, manifest);
+      selectDossier(repo, manifest);
+      showPanel(false);
+    } catch (error) {
+      dossierError.textContent = error.message || 'Could not open this dossier.';
+      dossierError.hidden = false;
+    } finally { submit.disabled = false; el.button.disabled = false; state.switching = false; }
+  });
+  $('dossier-default').addEventListener('click', () => { $('dossier-url').value = DEFAULT_REPO; $('dossier-form').requestSubmit(); });
+  try { state.dossier = validateDossier(await (await fetch('./dossier.json')).json()); updateDossierHeading(); }
+  catch (error) { console.warn('Default dossier details unavailable:', error); }
 
   el.pills.forEach((pill) => {
     pill.addEventListener('click', () => setMode(pill.dataset.mode));
@@ -81,6 +121,29 @@ async function boot() {
     return;
   }
   el.input.focus();
+}
+
+function updateDossierHeading() {
+  if (!state.dossier) return;
+  $('dossier-name').textContent = state.dossier.title;
+  $('dossier-toggle').title = state.dossier.title;
+  document.querySelector('.masthead-facts').textContent = `${state.dossier.description || state.dossier.title} · ${state.dossier.document_count.toLocaleString()} documents · ${state.dossier.passage_count.toLocaleString()} passages`;
+}
+
+function selectDossier(repo, manifest) {
+  state.repository = repo;
+  state.dossier = manifest;
+  state.passages.clear();
+  state.activeCard = null;
+  state.query = '';
+  el.input.value = '';
+  el.summary.hidden = true;
+  el.count.hidden = true;
+  el.stream.innerHTML = '<div class="empty-state"><p class="empty-line">This dossier is ready.</p><p class="empty-hint">Search above to inspect its documents.</p></div>';
+  pdfStage.reset();
+  updateDossierHeading();
+  setCompact(false);
+  setStatus(`${manifest.title} is ready — ${manifest.document_count.toLocaleString()} documents.`);
 }
 
 function setMode(mode) {
@@ -117,7 +180,12 @@ async function runSearch() {
   const query = el.input.value.trim();
   if (!query) { el.input.focus(); return; }
   if (!db.isReady()) return;
+  if (state.searching || state.switching) return;
 
+  state.searching = true;
+  $('dossier-toggle').disabled = true;
+  $('dossier-panel').hidden = true;
+  $('dossier-toggle').setAttribute('aria-expanded', 'false');
   state.query = query;
   setCompact(true);
   el.button.disabled = true;
@@ -148,6 +216,8 @@ async function runSearch() {
     setStatus('Something went wrong while searching. Please try again.', false);
   } finally {
     el.button.disabled = false;
+    state.searching = false;
+    $('dossier-toggle').disabled = false;
   }
 }
 

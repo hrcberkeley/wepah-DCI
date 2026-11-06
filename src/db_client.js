@@ -23,6 +23,20 @@ export const CONFIG = {
   RERANKER_CANDIDATES: 40,
   RERANKER_KEYWORD_SHARE: 12,   // of the candidate pool; the rest comes from concept search
 };
+let activeDossier = null;
+
+export function currentRepository() { return CONFIG.HF_DATASET_REPO; }
+export async function openDossier(repo, manifest) {
+  const url = `https://huggingface.co/datasets/${repo}/resolve/main/${manifest.centroids_path}`;
+  const response = await fetch(url);
+  if (!response.ok) throw new Error(`Could not open the search index (${response.status}).`);
+  const centroids = await response.json();
+  if (centroids.model_id !== manifest.model_id || centroids.dimensions !== manifest.dimensions || !Array.isArray(centroids.clusters) || !centroids.clusters.length || centroids.clusters.some((c) => !Number.isInteger(c.cluster_id) || !Array.isArray(c.centroid) || c.centroid.length !== 384)) throw new Error('The search index does not match this dossier.');
+  // A failed validation leaves the previous dossier intact.
+  CONFIG.HF_DATASET_REPO = repo;
+  activeDossier = manifest;
+  _centroids = centroids;
+}
 
 // Pinned CDN bundles (no build step required)
 const DUCKDB_WASM_URL = 'https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@1.32.0/+esm';
@@ -41,8 +55,9 @@ export function dataUrl(path) {
 }
 
 export function pdfUrl(docId) {
-  return dataUrl(`pdfs/${docId}.pdf`);
+  return dataUrl(`${activeDossier?.pdfs_path || 'pdfs'}/${docId}.pdf`);
 }
+function corpusUrl() { return dataUrl(activeDossier?.corpus_path || 'corpus.parquet'); }
 
 const METADATA_COLUMNS =
   'passage_id, doc_id, doc_title, doc_date, page_number, content_type, passage_text, ' +
@@ -181,7 +196,7 @@ export async function keywordSearch(query, limit = CONFIG.MAX_KEYWORD_RESULTS) {
     try {
       const api = 'https://datasets-server.huggingface.co/search';
       const u = `${api}?dataset=${encodeURIComponent(CONFIG.HF_DATASET_REPO)}`
-        + `&config=default&split=train&query=${encodeURIComponent(query)}&limit=${limit}`;
+        + `&config=${encodeURIComponent(activeDossier?.config || 'default')}&split=${encodeURIComponent(activeDossier?.split || 'train')}&query=${encodeURIComponent(query)}&limit=${limit}`;
       const resp = await fetch(u);
       if (!resp.ok) throw new Error(`datasets-server ${resp.status}`);
       const data = await resp.json();
@@ -207,7 +222,7 @@ export async function keywordSearch(query, limit = CONFIG.MAX_KEYWORD_RESULTS) {
   const lit = sqlString(query);
   const sql = `
     SELECT ${METADATA_COLUMNS}
-    FROM read_parquet('${dataUrl('corpus.parquet')}')
+    FROM read_parquet('${corpusUrl()}')
     WHERE passage_text ILIKE '%' || ${lit} || '%'
     LIMIT ${limit};
   `;
@@ -242,7 +257,7 @@ export async function conceptSearch(query, limit = CONFIG.MAX_CONCEPT_RESULTS) {
   const sql = `
     SELECT ${METADATA_COLUMNS},
            array_cosine_similarity(CAST(embedding AS FLOAT[384]), ${vecLiteral}) AS score
-    FROM read_parquet('${dataUrl('corpus.parquet')}')
+    FROM read_parquet('${corpusUrl()}')
     WHERE cluster_id IN (${c1Safe}, ${c2Safe})
     ORDER BY score DESC
     LIMIT ${limit};
@@ -287,7 +302,7 @@ async function tokenSearch(query, limit) {
     .join(' + ');
   const sql = `
     SELECT ${METADATA_COLUMNS}, (${tf}) * 1000.0 / GREATEST(200, LENGTH(passage_text)) AS _tf
-    FROM read_parquet('${dataUrl('corpus.parquet')}')
+    FROM read_parquet('${corpusUrl()}')
     WHERE ${where}
     ORDER BY _tf DESC, doc_id ASC, page_number ASC
     LIMIT ${limit};

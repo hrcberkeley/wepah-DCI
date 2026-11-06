@@ -486,6 +486,8 @@ def main() -> None:
     ap.add_argument("--workers", type=int, default=max(2, min(6, (os.cpu_count() or 4) - 2)))
     ap.add_argument("--force", action="store_true", help="ignore extraction cache")
     ap.add_argument("--verify-only", action="store_true", help="only run the §6 verification checks")
+    ap.add_argument("--title", default="Untitled dossier", help="display name for dossier.json")
+    ap.add_argument("--description", default="", help="short docket description")
     args = ap.parse_args()
 
     if args.verify_only:
@@ -534,6 +536,20 @@ def main() -> None:
 
     # Stage D
     stage_export(all_rows)
+    (DIST_DATA_DIR / "dossier.json").write_text(json.dumps({
+        "schema_version": 1,
+        "title": args.title,
+        "description": args.description,
+        "document_count": len(ok_docs),
+        "passage_count": len(all_rows),
+        "model_id": CENTROIDS_MODEL_ID,
+        "dimensions": EMBED_DIM,
+        "config": "default",
+        "split": "train",
+        "corpus_path": "corpus.parquet",
+        "centroids_path": "centroids.json",
+        "pdfs_path": "pdfs",
+    }, indent=2))
 
     # §6 verification
     verify_corpus()

@@ -18,6 +18,27 @@ let currentDocId = null;
 let currentDocTitle = '';
 let pendingHighlight = null; // { x, y, w, h } in 0..1 percentages
 let zoomIndex = 0;
+let stageEpoch = 0;
+
+export function reset() {
+  stageEpoch += 1;
+  if (!el.canvas) return;
+  if (renderTask) { try { renderTask.cancel(); } catch { /* noop */ } }
+  if (currentPdf) currentPdf.destroy().catch(() => {});
+  currentPdf = null;
+  currentDocId = null;
+  currentDocTitle = '';
+  pendingHighlight = null;
+  el.layer.innerHTML = '';
+  el.figure.hidden = true;
+  el.empty.hidden = false;
+  el.title.textContent = 'No document open';
+  el.counter.textContent = '—';
+  el.prev.disabled = true;
+  el.next.disabled = true;
+  el.zoom.disabled = true;
+  el.download.hidden = true;
+}
 
 const el = {
   canvas: null, wrap: null, layer: null, scroll: null, empty: null,
@@ -149,7 +170,9 @@ export function highlightBox(bbox) {
  * Reuses the already-streamed document when the user stays inside one file.
  */
 export async function open({ docId, docTitle, pageNumber, bbox }) {
+  const epoch = ++stageEpoch;
   await loadLibrary();
+  if (epoch !== stageEpoch) return;
   if (!el.canvas) bindElements();
 
   el.download.hidden = false;
@@ -171,11 +194,13 @@ export async function open({ docId, docTitle, pageNumber, bbox }) {
   if (currentPdf) { try { await currentPdf.destroy(); } catch { /* noop */ } }
   currentPdf = null;
   currentDocId = null;
-  currentPdf = await pdfjsLib.getDocument({
+  const loadedPdf = await pdfjsLib.getDocument({
     url: pdfUrl(docId),
     disableAutoFetch: true,   // HTTP Range Requests: open p.45 of a 300-page file without the rest
     disableStream: false,
   }).promise;
+  if (epoch !== stageEpoch) { await loadedPdf.destroy(); return; }
+  currentPdf = loadedPdf;
   currentDocId = docId;
   currentDocTitle = docTitle || docId;
   el.title.textContent = currentDocTitle;
