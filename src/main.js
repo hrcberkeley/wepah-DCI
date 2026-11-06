@@ -301,11 +301,16 @@ async function selectBestPassages(query) {
         setStatus(`Reading the ${p.total} closest passages against your question — ${pct}%…`, pct < 100);
       }
     );
-    return pool
+    const ranked = pool
       .map((row, i) => ({ row, score: scores[i] ?? Number.NEGATIVE_INFINITY }))
-      .sort((a, b) => b.score - a.score)
-      .slice(0, CONFIG.DOSSIER_PASSAGES)
-      .map((x) => x.row);
+      .sort((a, b) => b.score - a.score);
+    const seenText = new Set();
+    return ranked.filter(({ row }) => {
+      const key = (row.passage_text || '').replace(/\s+/g, ' ').trim().toLowerCase().slice(0, 220);
+      if (seenText.has(key)) return false;
+      seenText.add(key);
+      return true;
+    }).slice(0, CONFIG.DOSSIER_PASSAGES).map((x) => x.row);
   } catch (err) {
     console.warn('Re-ranking unavailable; using plain hybrid retrieval.', err);
     return pool.slice(0, CONFIG.DOSSIER_PASSAGES);
@@ -369,7 +374,14 @@ async function renderDossier(query, rows) {
 function gateClaims(rawClaims, rows) {
   const passageById = new Map(rows.map((r) => [r.passage_id, r]));
   const verified = verifier.verifyClaims(rawClaims, passageById)
-    .filter((claim) => verifier.normalizeWhitespace(claim.statement));
+    .filter((claim) => {
+      const statement = verifier.normalizeWhitespace(claim.statement);
+      const quote = verifier.normalizeWhitespace(claim.verbatim_quote);
+      if (!statement) return false;
+      // The quote check alone does not catch invented measurements or dates.
+      const figures = statement.match(/\d+(?:[.,]\d+)*/g) || [];
+      return figures.every((figure) => quote.includes(figure));
+    });
   const distinct = [];
   for (const claim of verified) {
     const statement = verifier.normalizeWhitespace(claim.statement).toLowerCase();

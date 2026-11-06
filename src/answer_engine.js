@@ -252,10 +252,11 @@ function buildMessages(question, rows) {
       content:
         'Answer the question using ONLY the numbered excerpts below.\n' +
         'Rules:\n' +
-        '- Produce 2 to 4 claims that together answer the question.\n' +
-        '- claim.statement: ONE plain sentence, grounded in a single excerpt.\n' +
+        '- Produce a direct answer in 2 to 4 complementary claims. Include important qualifications or contrary evidence.\n' +
+        '- Each claim must be supported by ONE excerpt. Never combine facts from different excerpts in one claim.\n' +
+        '- claim.statement: ONE concise sentence in your own words that restates only what the quoted source span says. Do not add a number, location, affected group, impact level, or mitigation unless it appears in the quote.\n' +
         '- claim.passage_id: copy the passage_id of the excerpt you used, character-for-character.\n' +
-        '- claim.verbatim_quote: copy ONE contiguous sentence from that excerpt, character-for-character. Never paraphrase it.\n' +
+        '- claim.verbatim_quote: copy a contiguous supporting span from that excerpt, character-for-character. Include every fact needed to support the statement. Never paraphrase the quote.\n' +
         '- If the excerpts do not answer the question, return {"claims":[]}.\n\n' +
         `Question: ${question}\n\nExcerpts:\n${excerpts}`,
     },
