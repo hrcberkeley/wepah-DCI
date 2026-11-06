@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Investigations Lab's WeHPAH! (We have pinpoint at home!)</title>
+  <link rel="stylesheet" href="./style.css" />
+</head>
+<body>
+  <header class="top-bar">
+    <div class="brand">
+      <h1 class="brand-title">Investigations Lab's WeHPAH!</h1>
+      <p class="brand-sub">(We have pinpoint at home!) &mdash; every answer traceable to the original page</p>
+    </div>
+
+    <!-- §5.2 Pedagogical Mode Switcher -->
+    <nav class="mode-switcher" role="tablist" aria-label="Search mode">
+      <button class="pill active" data-mode="exact"  role="tab" aria-selected="true">1. Find Exact Words</button>
+      <button class="pill" data-mode="concepts" role="tab" aria-selected="false">2. Explore Concepts</button>
+      <button class="pill" data-mode="dossier"  role="tab" aria-selected="false">3. Ask the Dossier</button>
+    </nav>
+
+    <div class="search-row">
+      <input id="search-input" type="text" autocomplete="off" spellcheck="false"
+             placeholder="Search names, dates, statute numbers, or exact phrases..." />
+      <button id="search-button" class="primary">Search</button>
+    </div>
+    <p id="helper-copy" class="helper-copy">
+      <em>Finds documents containing your exact words, just like Ctrl+F across every file at once.</em>
+    </p>
+    <div id="status-bar" class="status-bar" role="status"></div>
+  </header>
+
+  <main class="workspace">
+    <!-- §5.3 Left Pane: The Evidence Stream -->
+    <section id="left-pane" class="left-pane" aria-label="Evidence stream">
+      <div id="dossier-summary" class="dossier-summary" hidden></div>
+      <div id="evidence-stream" class="evidence-stream">
+        <div class="empty-state">
+          <p>Search the complete record to see matching passages here.</p>
+          <p class="empty-hint">Click any result to open the original page beside it.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- §5.5 Right Pane: The Grounding Stage -->
+    <section id="right-pane" class="right-pane" aria-label="Original document viewer">
+      <div class="stage-header">
+        <div id="stage-doc-title" class="stage-doc-title">No document open</div>
+        <div class="stage-controls">
+          <button id="page-prev" class="ghost" disabled>&lsaquo; Prev</button>
+          <span id="page-counter" class="page-counter">&mdash;</span>
+          <button id="page-next" class="ghost" disabled>Next &rsaquo;</button>
+          <span class="control-sep"></span>
+          <button id="zoom-toggle" class="ghost" disabled>Fit Width</button>
+          <span class="control-sep"></span>
+          <a id="download-pdf" class="ghost download-link" hidden
+             download="document.pdf">Download Original PDF</a>
+        </div>
+      </div>
+      <div id="stage-scroll" class="stage-scroll">
+        <div id="stage-empty" class="stage-empty">
+          <p>Click any evidence card to open the cited page here.</p>
+        </div>
+        <div id="canvas-wrap" class="canvas-wrap" hidden>
+          <canvas id="pdf-canvas"></canvas>
+          <div id="bbox-layer" class="bbox-overlay-layer"></div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <script type="module" src="./src/main.js"></script>
+</body>
+</html>
