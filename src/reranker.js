@@ -29,9 +29,10 @@ function workerSource() {
       try {
         if (op === 'init') {
           tok = await AutoTokenizer.from_pretrained(payload.model);
-          // WebGPU fp16 scores pairs ~10x faster than WASM but can emit NaN logits
-          // for this classifier on some driver stacks — validate with a canary pair
-          // and fall back to WASM q8 when the output is not finite.
+          // WebGPU fp16 scores pairs ~10x faster than WASM but can emit NaN logits,
+          // or finite-but-degraded ones, for this classifier on some driver stacks.
+          // The canary therefore checks a KNOWN relevance ordering — relevant text
+          // must outscore irrelevant text — and falls back to WASM q8 when it fails.
           let device = 'wasm', dtype = 'q8';
           const load = async (dev, dt) => AutoModelForSequenceClassification.from_pretrained(payload.model, {
             dtype: dt, device: dev,
@@ -41,12 +42,20 @@ function workerSource() {
               }
             },
           });
+          const CANARY = {
+            query: 'Will construction of the project create noise impacts for nearby residents?',
+            good: 'Noise — construction activities would have the potential to create significant noise impacts affecting nearby residences.',
+            bad: 'The applicant proposes to construct and operate two single-story data center buildings.',
+          };
           const canaryOK = async (m) => {
             try {
-              const t = tok(['Will construction create noise impacts?'],
-                { text_pair: ['The project includes 45 backup generators.'], truncation: true, max_length: 128 });
-              const out = await m(t);
-              return Number.isFinite(Number(out.logits.data[0]));
+              const score = async (doc) => {
+                const t = tok([CANARY.query], { text_pair: [doc], truncation: true, max_length: 128 });
+                return Number((await m(t)).logits.data[0]);
+              };
+              const good = await score(CANARY.good);
+              const bad = await score(CANARY.bad);
+              return Number.isFinite(good) && Number.isFinite(bad) && good > bad;
             } catch { return false; }
           };
           try {

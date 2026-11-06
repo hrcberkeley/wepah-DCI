@@ -1,12 +1,17 @@
 // answer_engine.js — the on-device answering helper behind "Ask the Dossier".
 //
-// Runs Qwen3-1.7B (WebLLM, WebGPU) entirely in a Web Worker so the UI thread
+// Runs Qwen3.5-4B (WebLLM, WebGPU) entirely in a Web Worker so the UI thread
 // stays free. Claims are grammar-constrained to valid JSON and still pass the
 // deterministic verifier gate in verifier.js before anything reaches the screen.
-// The model (~1.1 GB, q4f16) downloads once and is cached by the browser.
+// The model (~2.5 GB, q4f16) downloads once and is cached by the browser.
+//
+// Model choice (Nov 2026 leaderboard pass): at tiny sizes Qwen3.5-2B only gains
+// ~3 points over Qwen3-1.7B and the model card warns about "thinking loops";
+// Qwen3.5-4B scores 89.8% IFEval (vs 78.6% for the 2B) — instruction-following
+// precision is exactly what the JSON claim + verbatim-quote contract needs.
 
 const WEBLLM_URL = 'https://esm.run/@mlc-ai/web-llm@0.2.87';
-const MODEL_ID = 'Qwen3-1.7B-q4f16_1-MLC';
+const MODEL_ID = 'Qwen3.5-4B-q4f16_1-MLC';
 const STORAGE_KEY = 'wehpah-answer-engine-enabled';
 
 function clip(text, max = 900) {

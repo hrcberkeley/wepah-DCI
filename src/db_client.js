@@ -259,6 +259,10 @@ const STOP_WORDS = new Set([
   'while', 'those', 'these', 'they', 'them', 'than', 'then', 'into', 'over',
   'more', 'most', 'some', 'such', 'only', 'also', 'very', 'just', 'like',
   'make', 'made', 'were', 'each', 'much', 'many', 'upon', 'within', 'shall',
+  // Dossier-generic words: they appear in virtually every passage of this
+  // record ("San Jose Data Center project"), so they carry zero retrieval
+  // signal and crowd meaningful question words out of the token budget.
+  'data', 'center', 'centers', 'project', 'san', 'jose', 'city',
 ]);
 
 /**
@@ -270,17 +274,19 @@ async function tokenSearch(query, limit) {
   const tokens = query
     .split(/[^A-Za-z0-9']+/)
     .filter((w) => w.length >= 4 && !STOP_WORDS.has(w.toLowerCase()))
-    .slice(0, 6);
+    .slice(0, 8);
   if (!tokens.length) return [];
   const esc = (t) => t.replace(/\0/g, '').replace(/'/g, "''");
   const where = tokens.map((t) => `passage_text ILIKE '%${esc(t)}%'`).join(' OR ');
-  // Term-frequency scoring: a dedicated noise section says "noise" fifty times,
-  // a boilerplate letter says it once — presence-counts alone let boilerplate win.
+  // Term-frequency scoring, normalized by passage length: a dedicated noise
+  // section says "noise" fifty times, a boilerplate letter says it once —
+  // presence-counts alone let boilerplate win, and raw counts let 13k-char
+  // policy tables that mention every token incidentally win over both.
   const tf = tokens
     .map((t) => `((LENGTH(passage_text) - LENGTH(REPLACE(UPPER(passage_text), '${esc(t.toUpperCase())}', ''))) / ${t.length})`)
     .join(' + ');
   const sql = `
-    SELECT ${METADATA_COLUMNS}, (${tf}) AS _tf
+    SELECT ${METADATA_COLUMNS}, (${tf}) * 1000.0 / GREATEST(200, LENGTH(passage_text)) AS _tf
     FROM read_parquet('${dataUrl('corpus.parquet')}')
     WHERE ${where}
     ORDER BY _tf DESC, doc_id ASC, page_number ASC
