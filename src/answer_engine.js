@@ -14,6 +14,17 @@ function clip(text, max = 900) {
   return t.length > max ? `${t.slice(0, max)}…` : t;
 }
 
+/** Markdown tables confuse small models — flatten pipes into readable dashes. */
+function flatten(text, max = 900) {
+  return clip(
+    String(text ?? '')
+      .replace(/\s*\|\s*/g, ' — ')
+      .replace(/\n{2,}/g, '\n')
+      .trim(),
+    max
+  );
+}
+
 let _worker = null;
 let _seq = 0;
 const _pending = new Map();
@@ -134,7 +145,7 @@ const CLAIMS_SCHEMA = {
 function buildMessages(question, rows) {
   const excerpts = rows
     .map((r, i) =>
-      `[${i + 1}] passage_id=${r.passage_id} (from "${r.doc_title}", page ${r.page_number})\n"""${clip(r.passage_text)}"""`
+      `[${i + 1}] passage_id=${r.passage_id} (from "${r.doc_title}", page ${r.page_number})\n"""${flatten(r.passage_text)}"""`
     )
     .join('\n\n');
 
@@ -163,7 +174,8 @@ function buildMessages(question, rows) {
 export async function generateClaims(question, rows) {
   const res = await call('complete', {
     messages: buildMessages(question, rows),
-    responseFormat: { type: 'json_object', schema: CLAIMS_SCHEMA },
+    // WebLLM's XGrammar expects the schema as a JSON-encoded string.
+    responseFormat: { type: 'json_object', schema: JSON.stringify(CLAIMS_SCHEMA) },
     maxTokens: 700,
   });
   const text = res.content || '';

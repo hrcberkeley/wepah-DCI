@@ -11,6 +11,7 @@ import { CONFIG } from './db_client.js';
 import * as verifier from './verifier.js';
 import * as pdfStage from './pdf_stage.js';
 import * as answerEngine from './answer_engine.js';
+import * as reranker from './reranker.js';
 
 // §5.2 The Pedagogical Mode Switcher
 const MODES = {
@@ -118,7 +119,7 @@ async function runSearch() {
         ? `Found ${rows.length} related passage${rows.length === 1 ? '' : 's'}. Click a card to see the original page.`
         : 'Nothing closely related yet. Try describing the topic with different words.', false);
     } else {
-      const rows = await db.hybridPassages(query);
+      const rows = await selectBestPassages(query);
       await renderDossier(query, rows);
     }
   } catch (err) {
@@ -236,6 +237,46 @@ function openGrounding(row) {
 }
 
 // ---------- Ask the Dossier (§5.4) ----------
+
+/**
+ * Cross-encoder re-ranking (§ retrieval quality): pull a wide candidate pool,
+ * score every (question, passage) pair with bge-reranker, keep the best 6.
+ * Falls back to plain hybrid retrieval if the reranker can't load or score.
+ */
+async function selectBestPassages(query) {
+  const candidates = await db.candidatePassages(query, CONFIG.RERANKER_CANDIDATES);
+  // Drop table-cell fragments — they carry no answer and pollute the prompt.
+  const pool = candidates.filter((r) => (r.passage_text || '').length >= 200);
+  const use = pool.length >= CONFIG.DOSSIER_PASSAGES ? pool : candidates;
+  if (use.length <= CONFIG.DOSSIER_PASSAGES) return use;
+
+  try {
+    setStatus('Double-checking which passages matter most…', true);
+    await reranker.ensureReady((p) => {
+      if (p.kind === 'progress' && p.total) {
+        const pct = Math.round((p.loaded / p.total) * 100);
+        setStatus(`Preparing the passage double-checker — ${pct}% (one-time download, saved on this device)…`, pct < 100);
+      }
+    });
+    const scores = await reranker.rank(
+      query,
+      pool.map((r) => excerpt(r.passage_text, 1000)),
+      (p) => {
+        const pct = p.total ? Math.round((p.done / p.total) * 100) : 0;
+        setStatus(`Reading the ${p.total} closest passages against your question — ${pct}%…`, pct < 100);
+      }
+    );
+    return pool
+      .map((row, i) => ({ row, score: scores[i] ?? Number.NEGATIVE_INFINITY }))
+      .sort((a, b) => b.score - a.score)
+      .slice(0, CONFIG.DOSSIER_PASSAGES)
+      .map((x) => x.row);
+  } catch (err) {
+    console.warn('Re-ranking unavailable; using plain hybrid retrieval.', err);
+    return pool.slice(0, CONFIG.DOSSIER_PASSAGES);
+  }
+}
+
 async function renderDossier(query, rows) {
   state.passages.clear();
   rows.forEach((r) => state.passages.set(r.passage_id, r));

@@ -18,6 +18,10 @@ export const CONFIG = {
   MAX_KEYWORD_RESULTS: 25,
   MAX_CONCEPT_RESULTS: 15,
   DOSSIER_PASSAGES: 6,
+  // Cross-encoder re-ranking pool for Ask the Dossier (retrieval quality pass).
+  RERANKER_MODEL: 'Xenova/ms-marco-MiniLM-L-6-v2',
+  RERANKER_CANDIDATES: 40,
+  RERANKER_KEYWORD_SHARE: 12,   // of the candidate pool; the rest comes from concept search
 };
 
 // Pinned CDN bundles (no build step required)
@@ -172,12 +176,12 @@ export function embedRaw(text) {
 }
 
 // ---------- Mode 1: Find Exact Words (§4.2) ----------
-export async function keywordSearch(query) {
+export async function keywordSearch(query, limit = CONFIG.MAX_KEYWORD_RESULTS) {
   if (CONFIG.HF_DATASET_REPO) {
     try {
       const api = 'https://datasets-server.huggingface.co/search';
       const u = `${api}?dataset=${encodeURIComponent(CONFIG.HF_DATASET_REPO)}`
-        + `&config=default&split=train&query=${encodeURIComponent(query)}&limit=${CONFIG.MAX_KEYWORD_RESULTS}`;
+        + `&config=default&split=train&query=${encodeURIComponent(query)}&limit=${limit}`;
       const resp = await fetch(u);
       if (!resp.ok) throw new Error(`datasets-server ${resp.status}`);
       const data = await resp.json();
@@ -205,14 +209,14 @@ export async function keywordSearch(query) {
     SELECT ${METADATA_COLUMNS}
     FROM read_parquet('${dataUrl('corpus.parquet')}')
     WHERE passage_text ILIKE '%' || ${lit} || '%'
-    LIMIT ${CONFIG.MAX_KEYWORD_RESULTS};
+    LIMIT ${limit};
   `;
   const result = await runQuery(sql);
   return rowsToObjects(result);
 }
 
 // ---------- Mode 2: Explore Concepts (§4.3, centroid-routed) ----------
-export async function conceptSearch(query) {
+export async function conceptSearch(query, limit = CONFIG.MAX_CONCEPT_RESULTS) {
   if (!_centroids || !_centroids.clusters.length) throw new Error('Centroid index not loaded');
 
   // 1. Query vector, computed in the browser worker
@@ -241,7 +245,7 @@ export async function conceptSearch(query) {
     FROM read_parquet('${dataUrl('corpus.parquet')}')
     WHERE cluster_id IN (${c1Safe}, ${c2Safe})
     ORDER BY score DESC
-    LIMIT ${CONFIG.MAX_CONCEPT_RESULTS};
+    LIMIT ${limit};
   `;
   const result = await runQuery(sql);
   const rows = rowsToObjects(result);
@@ -249,29 +253,66 @@ export async function conceptSearch(query) {
   return rows;
 }
 
-// ---------- Mode 3: Ask the Dossier — hybrid retrieval (§5.4.1) ----------
-export async function hybridPassages(query, k = CONFIG.DOSSIER_PASSAGES) {
-  const [kw, cs] = await Promise.allSettled([
-    keywordSearch(query),
-    conceptSearch(query),
-  ]);
+const STOP_WORDS = new Set([
+  'will', 'this', 'that', 'with', 'from', 'have', 'been', 'their', 'about',
+  'which', 'what', 'when', 'where', 'does', 'under', 'after', 'before',
+  'while', 'those', 'these', 'they', 'them', 'than', 'then', 'into', 'over',
+  'more', 'most', 'some', 'such', 'only', 'also', 'very', 'just', 'like',
+  'make', 'made', 'were', 'each', 'much', 'many', 'upon', 'within', 'shall',
+]);
+
+/**
+ * Keyword search over the question's content words. Sentence-style questions never
+ * match ILIKE verbatim, so the dossier pool needs per-token matching (scored by
+ * number of term hits) to pull in topically decisive passages.
+ */
+async function tokenSearch(query, limit) {
+  const tokens = query
+    .split(/[^A-Za-z0-9']+/)
+    .filter((w) => w.length >= 4 && !STOP_WORDS.has(w.toLowerCase()))
+    .slice(0, 6);
+  if (!tokens.length) return [];
+  const esc = (t) => t.replace(/\0/g, '').replace(/'/g, "''");
+  const where = tokens.map((t) => `passage_text ILIKE '%${esc(t)}%'`).join(' OR ');
+  // Term-frequency scoring: a dedicated noise section says "noise" fifty times,
+  // a boilerplate letter says it once — presence-counts alone let boilerplate win.
+  const tf = tokens
+    .map((t) => `((LENGTH(passage_text) - LENGTH(REPLACE(UPPER(passage_text), '${esc(t.toUpperCase())}', ''))) / ${t.length})`)
+    .join(' + ');
+  const sql = `
+    SELECT ${METADATA_COLUMNS}, (${tf}) AS _tf
+    FROM read_parquet('${dataUrl('corpus.parquet')}')
+    WHERE ${where}
+    ORDER BY _tf DESC, doc_id ASC, page_number ASC
+    LIMIT ${limit};
+  `;
+  const result = await runQuery(sql);
+  return rowsToObjects(result);
+}
+
+/** Wide candidate pool for Ask the Dossier: token-keyword + phrase-keyword + concept hits, deduped.
+ *  Callers slice/select from this pool (e.g., after cross-encoder re-ranking).
+ *  Queries run sequentially — one AsyncDuckDBConnection serializes its messages and
+ *  concurrent queries can deadlock the worker. */
+export async function candidatePassages(query, k = CONFIG.RERANKER_CANDIDATES) {
+  const kwN = Math.min(CONFIG.RERANKER_KEYWORD_SHARE, k);
+  const csN = Math.max(0, k - kwN);
   const seen = new Set();
-  const merged = [];
+  const pool = [];
   const pushAll = (rows) => {
     if (!Array.isArray(rows)) return;
     for (const r of rows) {
       if (!seen.has(r.passage_id)) {
         seen.add(r.passage_id);
-        merged.push(r);
+        pool.push(r);
       }
     }
   };
-  if (kw.status === 'fulfilled') pushAll(kw.value);
-  if (cs.status === 'fulfilled') pushAll(cs.value);
-  if (kw.status === 'rejected' && cs.status === 'rejected') {
-    throw new Error('Both search methods failed');
-  }
-  return merged.slice(0, k);
+  try { pushAll(await tokenSearch(query, kwN)); } catch (err) { console.warn('token search failed:', err); }
+  try { pushAll(await keywordSearch(query, 4)); } catch (err) { console.warn('phrase search failed:', err); }
+  try { pushAll(await conceptSearch(query, csN)); } catch (err) { console.warn('concept search failed:', err); }
+  if (!pool.length) throw new Error('All search methods failed');
+  return pool;
 }
 
 // ---------- helpers ----------
