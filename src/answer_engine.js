@@ -1,18 +1,69 @@
 // answer_engine.js — the on-device answering helper behind "Ask the Dossier".
 //
-// Runs Qwen3.5-4B (WebLLM, WebGPU) entirely in a Web Worker so the UI thread
+// Runs Qwen3.5 (WebLLM, WebGPU) entirely in a Web Worker so the UI thread
 // stays free. Claims are grammar-constrained to valid JSON and still pass the
 // deterministic verifier gate in verifier.js before anything reaches the screen.
-// The model (~2.5 GB, q4f16) downloads once and is cached by the browser.
+// The model downloads once and is cached by the browser.
 //
 // Model choice (Nov 2026 leaderboard pass): at tiny sizes Qwen3.5-2B only gains
 // ~3 points over Qwen3-1.7B and the model card warns about "thinking loops";
 // Qwen3.5-4B scores 89.8% IFEval (vs 78.6% for the 2B) — instruction-following
 // precision is exactly what the JSON claim + verbatim-quote contract needs.
+//
+// Adaptive tiering: capable machines get the 4B, constrained GPUs / low-RAM
+// machines start one or two tiers down, and any failed init automatically
+// retries with the next smaller tier — so the written answer (or the
+// zero-download extractive fallback) works on everything from an M4 Max
+// to an 8 GB laptop.
 
 const WEBLLM_URL = 'https://esm.run/@mlc-ai/web-llm@0.2.87';
-const MODEL_ID = 'Qwen3.5-4B-q4f16_1-MLC';
 const STORAGE_KEY = 'wehpah-answer-engine-enabled';
+
+// Prebuilt WebLLM models, best-first. approxGB is the one-time download size
+// shown in the UI; MLC publishes VRAM lower bounds of ~3.9 / ~2.2 / ~1.6 GB.
+const MODEL_TIERS = [
+  { id: 'Qwen3.5-4B-q4f16_1-MLC', approxGB: '2.5' },
+  { id: 'Qwen3.5-2B-q4f16_1-MLC', approxGB: '1.3' },
+  { id: 'Qwen3.5-0.8B-q4f16_1-MLC', approxGB: '0.9' },
+];
+
+/** Pick the tier to TRY FIRST on this machine (a failed init still retries smaller). */
+async function pickStartTier() {
+  // navigator.deviceMemory is capped at 8 (meaning "8 GB or more"), so any
+  // reported value below 8 identifies a genuinely small machine.
+  const mem = Number(navigator.deviceMemory) || null;
+  if (mem && mem < 8) return MODEL_TIERS.length - 1;
+
+  let gpu = null;
+  try {
+    const adapter = navigator.gpu ? await navigator.gpu.requestAdapter() : null;
+    if (adapter) {
+      let info = adapter.info || null;
+      if (!info && typeof adapter.requestAdapterInfo === 'function') {
+        try { info = await adapter.requestAdapterInfo(); } catch { /* older API */ }
+      }
+      gpu = {
+        apple: /apple/i.test(`${info?.vendor || ''} ${info?.architecture || ''} ${info?.description || ''}`),
+        maxBufferMB: adapter.limits ? adapter.limits.maxBufferSize / (1024 * 1024) : null,
+      };
+    }
+  } catch { /* no WebGPU: callers already gate on webGPUSupported() */ }
+
+  if (gpu && gpu.maxBufferMB !== null && gpu.maxBufferMB < 1536) return MODEL_TIERS.length - 1;
+  if (gpu && gpu.apple) return 0;   // Apple Silicon: unified memory, 16 GB+ in practice
+  if (gpu && gpu.maxBufferMB !== null && gpu.maxBufferMB >= 3072) return 0;
+  return 1;
+}
+
+/** Approximate one-time download size for this machine, e.g. "2.5" (GB), or null. */
+export async function estimateSetupGB() {
+  try {
+    const tier = MODEL_TIERS[await pickStartTier()];
+    return tier ? tier.approxGB : null;
+  } catch {
+    return null;
+  }
+}
 
 function clip(text, max = 900) {
   const t = String(text ?? '');
@@ -35,6 +86,12 @@ let _seq = 0;
 const _pending = new Map();
 let _ready = false;
 let _initPromise = null;
+let _modelId = null;
+
+/** Model id the engine actually initialized with (for diagnostics). */
+export function activeModelId() {
+  return _modelId;
+}
 
 // ---------- opt-in state (plain-language consent for the one-time download) ----------
 export function optedIn() {
@@ -120,8 +177,21 @@ export async function ensureReady(onProgress) {
   if (_ready) return;
   if (!_initPromise) {
     _initPromise = (async () => {
-      await call('init', { modelId: MODEL_ID }, onProgress);
-      _ready = true;
+      let idx = await pickStartTier();
+      for (;;) {
+        try {
+          await call('init', { modelId: MODEL_TIERS[idx].id }, onProgress);
+          _modelId = MODEL_TIERS[idx].id;
+          _ready = true;
+          return;
+        } catch (err) {
+          if (idx + 1 >= MODEL_TIERS.length) throw err;
+          idx += 1;
+          // The GPU couldn't hold this tier — step down and let the caller's
+          // progress UI show the restart.
+          onProgress?.({ progress: 0, text: `The larger model didn't fit this machine — preparing a smaller one…` });
+        }
+      }
     })();
   }
   await _initPromise;

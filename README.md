@@ -85,8 +85,12 @@ after a Nov 2026 leaderboard pass (tiny-model quality per IFEval/BFCL; the same-
 gains only ~3 points over the older 1.7B with a "thinking loops" caveat, while the 4B scores
 89.8% IFEval) — running entirely in a Web Worker on the user's machine
 (`web_app/src/answer_engine.js`). First use requires an explicit opt-in (a gold chip on the
-summary box — the ~2.5 GB q4f16 download is
-one-time and browser-cached). Claims are grammar-constrained to valid JSON via XGrammar
+summary box — a device-tiered download of ~0.9–2.5 GB is
+one-time and browser-cached). **Adaptive tiering:** at opt-in the engine probes the GPU
+adapter (limits + vendor) and the reported device memory — capable machines start at the 4B,
+mid machines at Qwen3.5-2B (~1.3 GB), small ones at Qwen3.5-0.8B (~0.9 GB); any failed init
+automatically retries the next smaller tier, and machines where nothing fits keep the
+deterministic extractive fallback. Claims are grammar-constrained to valid JSON via XGrammar
 (`response_format: json_object` + schema) and then pass the §5.4.4 verification gate in
 `verifier.js` — `verbatim_quote` must appear character-for-character in the cited passage,
 and `passage_id` must resolve, or the claim is silently dropped. When WebGPU is unavailable,

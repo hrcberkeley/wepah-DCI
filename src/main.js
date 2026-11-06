@@ -293,7 +293,7 @@ async function renderDossier(query, rows) {
 
   if (engineOn) {
     try {
-      // One-time model setup (~2.5 GB), reported in plain language; cached afterwards.
+      // One-time model setup (tiered by device, ~0.9–2.5 GB), cached afterwards.
       await answerEngine.ensureReady((p) => {
         const pct = Math.round((p.progress || 0) * 100);
         setStatus(`Preparing the answering helper — ${pct}% (one-time download, saved on this device)…`, pct < 100);
@@ -414,7 +414,11 @@ function renderSummary(query, claims, rows, { offerSetup = false, onEnableEngine
     const chip = document.createElement('button');
     chip.type = 'button';
     chip.className = 'setup-chip';
-    chip.textContent = 'Get full written answers — one-time 2.5 GB setup, saved on this device';
+    chip.textContent = 'Get full written answers — one-time setup download, saved on this device';
+    // The size depends on which model tier this machine gets; fill it in when known.
+    answerEngine.estimateSetupGB().then((gb) => {
+      if (gb) chip.textContent = `Get full written answers — one-time ~${gb} GB setup, saved on this device`;
+    }).catch(() => {});
     chip.addEventListener('click', async () => {
       answerEngine.optIn();
       chip.disabled = true;
