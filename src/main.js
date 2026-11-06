@@ -41,7 +41,7 @@ const state = {
 
 const el = {
   pills: null, input: null, button: null, helper: null, status: null,
-  stream: null, summary: null,
+  stream: null, summary: null, count: null, expand: null,
 };
 
 function $(id) { return document.getElementById(id); }
@@ -55,12 +55,22 @@ async function boot() {
   el.status = $('status-bar');
   el.stream = $('evidence-stream');
   el.summary = $('dossier-summary');
+  el.count = $('results-count');
+  el.expand = $('expand-header');
 
   el.pills.forEach((pill) => {
     pill.addEventListener('click', () => setMode(pill.dataset.mode));
   });
   el.button.addEventListener('click', () => runSearch());
-  el.input.addEventListener('keydown', (e) => { if (e.key === 'Enter') runSearch(); });
+  el.input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') runSearch();
+    // Escape folds the compact strip back into the full search cover.
+    if (e.key === 'Escape' && document.body.classList.contains('compact')) {
+      setCompact(false);
+      el.input.select();
+    }
+  });
+  el.expand.addEventListener('click', () => { setCompact(false); el.input.focus(); });
 
   try {
     await db.initEngine();
@@ -93,6 +103,15 @@ function setStatus(msg, busy = false) {
   el.status.classList.toggle('busy', busy);
 }
 
+/**
+ * The essay cover folds into a slim sticky strip once the first search runs,
+ * giving the results and the original pages nearly the whole window.
+ */
+function setCompact(on) {
+  document.body.classList.toggle('compact', on);
+  el.expand.setAttribute('aria-expanded', String(!on));
+}
+
 // ---------- search dispatch ----------
 async function runSearch() {
   const query = el.input.value.trim();
@@ -100,6 +119,7 @@ async function runSearch() {
   if (!db.isReady()) return;
 
   state.query = query;
+  setCompact(true);
   el.button.disabled = true;
   el.summary.hidden = true;
   setStatus(MODES[state.mode].busy, true);
@@ -131,18 +151,18 @@ async function runSearch() {
   }
 }
 
-// ---------- evidence cards (§5.3) ----------
+// ---------- evidence entries (§5.3) ----------
 function badgeFor(row, mode) {
   if (row.content_type === 'visual_evidence') {
-    return { cls: 'visual', text: 'Contains Figure / Stamp' };
+    return { cls: 'tag-visual', text: 'Figure · Stamp' };
   }
-  if (mode === 'exact') return { cls: 'exact', text: 'Exact Word Match' };
+  if (mode === 'exact') return { cls: 'tag-exact', text: 'Exact word match' };
   if (mode === 'concepts') {
     return (typeof row.score === 'number' && row.score >= CONFIG.STRONG_MATCH_THRESHOLD)
-      ? { cls: 'strong', text: 'Strong Conceptual Match' }
-      : { cls: 'related', text: 'Related Context' };
+      ? { cls: 'tag-strong', text: 'Strong conceptual match' }
+      : { cls: 'tag-related', text: 'Related context' };
   }
-  return { cls: 'related', text: 'Related Context' };
+  return { cls: 'tag-related', text: 'Related context' };
 }
 
 function escapeHtml(s) {
@@ -167,47 +187,62 @@ function excerpt(text, max = 700) {
 }
 
 function renderStreamLoading() {
-  el.stream.innerHTML = `
-    <div class="empty-state"><p>Looking through the record…</p></div>`;
+  el.count.hidden = true;
+  el.stream.innerHTML = Array.from({ length: 3 }, () => `
+    <div class="skeleton" aria-hidden="true">
+      <div class="bar" style="width: 42%"></div>
+      <div class="bar" style="width: 94%"></div>
+      <div class="bar" style="width: 78%"></div>
+      <div class="bar" style="width: 61%"></div>
+    </div>`).join('');
 }
 
 function renderStreamError() {
   el.stream.innerHTML = `
-    <div class="empty-state"><p>Nothing to show. Please adjust your search and try again.</p></div>`;
+    <div class="empty-state">
+      <p class="empty-line">Something went wrong while searching.</p>
+      <p class="empty-hint">Please try again — the record hasn't changed.</p>
+    </div>`;
 }
 
 function renderEvidenceCards(rows, mode, query) {
   state.passages.clear();
   rows.forEach((r) => state.passages.set(r.passage_id, r));
 
+  el.count.hidden = false;
+  el.count.innerHTML = mode === 'dossier'
+    ? `<b>${rows.length} source${rows.length === 1 ? '' : 's'}</b> · “${escapeHtml(query)}”`
+    : `<b>${rows.length} passage${rows.length === 1 ? '' : 's'}</b> · “${escapeHtml(query)}”`;
+
   if (!rows.length) {
     el.stream.innerHTML = `
       <div class="empty-state">
-        <p>No matching passages.</p>
-        <p class="empty-hint">Try different words, or switch search modes above.</p>
+        <p class="empty-line">No matching passages.</p>
+        <p class="empty-hint">Try different words, or switch search modes on the cover.</p>
       </div>`;
     return;
   }
 
   el.stream.innerHTML = '';
-  for (const row of rows) {
+  for (const [idx, row] of rows.entries()) {
     const badge = badgeFor(row, mode);
     const card = document.createElement('article');
-    card.className = 'evidence-card';
+    card.className = 'entry';
     card.dataset.passageId = row.passage_id;
+    card.style.setProperty('--i', idx); // stagger for the rise + highlighter swipe
 
     const quoteHtml = mode === 'exact'
       ? highlightTerms(escapeHtml(excerpt(row.passage_text)), query)
       : escapeHtml(excerpt(row.passage_text));
 
     card.innerHTML = `
-      <div class="card-header">
-        <span class="card-title">${escapeHtml(row.doc_title)}</span>
-        <span class="page-badge">Page ${row.page_number}</span>
-        <span class="match-badge ${badge.cls}">${badge.text}</span>
-      </div>
-      <blockquote class="card-quote">${quoteHtml}</blockquote>
-      <div class="card-meta">${escapeHtml(row.doc_date)} · ${escapeHtml(row.doc_id)}.pdf</div>
+      <header class="entry-head">
+        <h3 class="entry-doc" title="${escapeHtml(row.doc_title)}">${escapeHtml(row.doc_title)}</h3>
+        <span class="entry-page">p. ${row.page_number}</span>
+        <span class="entry-tag ${badge.cls}">${badge.text}</span>
+      </header>
+      <p class="entry-passage">${quoteHtml}</p>
+      <p class="entry-meta" title="${escapeHtml(`${row.doc_date} · ${row.doc_id}.pdf`)}">${escapeHtml(row.doc_date)} · ${escapeHtml(row.doc_id)}.pdf</p>
     `;
 
     card.addEventListener('click', () => {
@@ -382,7 +417,7 @@ function dot(a, b) {
 function renderSummary(query, claims, rows, { offerSetup = false, onEnableEngine = null, title = 'Extracted Key Passages' } = {}) {
   el.summary.innerHTML = `
     <h2>${escapeHtml(title)}</h2>
-    <p class="dossier-question">For: “${escapeHtml(query)}”</p>
+    <p class="dossier-q">For “${escapeHtml(query)}”</p>
     <ol id="claim-list"></ol>
   `;
   const list = el.summary.querySelector('#claim-list');
@@ -398,11 +433,13 @@ function renderSummary(query, claims, rows, { offerSetup = false, onEnableEngine
     text.textContent = claim.statement;
     li.appendChild(text);
 
-    // Gold verification pill: hover shows the verbatim quote, click opens the page.
+    // Gold verification chip on its own line under the sentence: hover quotes
+    // the verbatim source, click opens the cited page.
     const pill = document.createElement('button');
     pill.type = 'button';
     pill.className = 'verify-pill';
-    pill.textContent = `verify: ${passage.doc_title}, p. ${passage.page_number}`;
+    pill.textContent = `verify · ${passage.doc_title}, p. ${passage.page_number}`;
+    pill.title = `${passage.doc_title} — page ${passage.page_number}`;
     pill.dataset.quote = (claim.verbatim_quote || claim.statement).slice(0, 240);
     pill.addEventListener('click', () => openGrounding(passage));
     li.appendChild(pill);

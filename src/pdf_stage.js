@@ -15,12 +15,14 @@ let currentPdf = null;      // PDFDocumentProxy
 let currentPageNum = 1;
 let renderTask = null;
 let currentDocId = null;
+let currentDocTitle = '';
 let pendingHighlight = null; // { x, y, w, h } in 0..1 percentages
 let zoomIndex = 0;
 
 const el = {
   canvas: null, wrap: null, layer: null, scroll: null, empty: null,
   title: null, counter: null, prev: null, next: null, zoom: null, download: null,
+  figure: null, caption: null,
 };
 
 function $(id) { return document.getElementById(id); }
@@ -37,6 +39,8 @@ function bindElements() {
   el.next = $('page-next');
   el.zoom = $('zoom-toggle');
   el.download = $('download-pdf');
+  el.figure = $('plate-figure');
+  el.caption = $('fig-caption');
 
   el.prev.addEventListener('click', () => gotoPage(currentPageNum - 1));
   el.next.addEventListener('click', () => gotoPage(currentPageNum + 1));
@@ -92,6 +96,7 @@ async function renderPage(pageNum, bbox) {
   el.canvas.style.height = `${viewport.height}px`;
 
   el.empty.hidden = true;
+  el.figure.hidden = false;
   el.wrap.hidden = false;
   el.layer.innerHTML = '';
 
@@ -109,6 +114,7 @@ async function renderPage(pageNum, bbox) {
 
   currentPageNum = pageNum;
   el.counter.textContent = `Page ${pageNum} of ${currentPdf.numPages}`;
+  el.caption.textContent = `fig. — ${currentDocTitle || currentDocId}, p. ${pageNum}`;
   el.prev.disabled = pageNum <= 1;
   el.next.disabled = pageNum >= currentPdf.numPages;
 
@@ -126,7 +132,16 @@ export function highlightBox(bbox) {
   box.style.width = `${bbox.w * 100}%`;
   box.style.height = `${bbox.h * 100}%`;
   el.layer.appendChild(box);
-  box.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'center' });
+  // Center the box in the stage well ONLY. scrollIntoView would also scroll the
+  // page itself sideways whenever the stage cannot center horizontally,
+  // pushing the whole workspace off-screen.
+  const stage = el.scroll.getBoundingClientRect();
+  const r = box.getBoundingClientRect();
+  el.scroll.scrollTo({
+    top: el.scroll.scrollTop + r.top - stage.top - stage.height / 2 + r.height / 2,
+    left: el.scroll.scrollLeft + r.left - stage.left - stage.width / 2 + r.width / 2,
+    behavior: 'smooth',
+  });
 }
 
 /**
@@ -145,7 +160,8 @@ export async function open({ docId, docTitle, pageNumber, bbox }) {
   const wanted = Math.max(1, Number(pageNumber) || 1);
 
   if (currentDocId === docId && currentPdf) {
-    el.title.textContent = docTitle || docId;
+    currentDocTitle = docTitle || docId;
+    el.title.textContent = currentDocTitle;
     pendingHighlight = bbox || null;
     await gotoPage(wanted);
     return;
@@ -161,7 +177,8 @@ export async function open({ docId, docTitle, pageNumber, bbox }) {
     disableStream: false,
   }).promise;
   currentDocId = docId;
-  el.title.textContent = docTitle || docId;
+  currentDocTitle = docTitle || docId;
+  el.title.textContent = currentDocTitle;
   await gotoPage(wanted, bbox);
 }
 

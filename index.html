@@ -4,75 +4,124 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Investigations Lab's WeHPAH! (We have pinpoint at home!)</title>
+  <meta name="description" content="Search the complete CEC San Jose Data Center docket and see every answer highlighted on the original page." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="stylesheet"
+        href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,800&family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,600;1,8..60,400;1,8..60,600&family=Spline+Sans+Mono:wght@400;500&display=swap" />
   <link rel="stylesheet" href="./style.css" />
 </head>
 <body>
-  <header class="top-bar">
-    <div class="brand">
-      <h1 class="brand-title">Investigations Lab's WeHPAH!</h1>
-      <p class="brand-sub">(We have pinpoint at home!) &mdash; every answer traceable to the original page</p>
-    </div>
+  <div class="app">
+    <!-- ============ Header: essay cover that folds into a slim strip ============ -->
+    <header id="app-header" class="app-header">
+      <div class="header-inner">
 
-    <!-- §5.2 Pedagogical Mode Switcher -->
-    <nav class="mode-switcher" role="tablist" aria-label="Search mode">
-      <button class="pill active" data-mode="exact"  role="tab" aria-selected="true">1. Find Exact Words</button>
-      <button class="pill" data-mode="concepts" role="tab" aria-selected="false">2. Explore Concepts</button>
-      <button class="pill" data-mode="dossier"  role="tab" aria-selected="false">3. Ask the Dossier</button>
-    </nav>
-
-    <div id="experimental-warning" class="experimental-warning" hidden role="alert">
-      This is an experimental feature
-    </div>
-
-    <div class="search-row">
-      <input id="search-input" type="text" autocomplete="off" spellcheck="false"
-             placeholder="Search names, dates, statute numbers, or exact phrases..." />
-      <button id="search-button" class="primary">Search</button>
-    </div>
-    <p id="helper-copy" class="helper-copy">
-      <em>Finds documents containing your exact words, just like Ctrl+F across every file at once.</em>
-    </p>
-    <div id="status-bar" class="status-bar" role="status"></div>
-  </header>
-
-  <main class="workspace">
-    <!-- §5.3 Left Pane: The Evidence Stream -->
-    <section id="left-pane" class="left-pane" aria-label="Evidence stream">
-      <div id="dossier-summary" class="dossier-summary" hidden></div>
-      <div id="evidence-stream" class="evidence-stream">
-        <div class="empty-state">
-          <p>Search the complete record to see matching passages here.</p>
-          <p class="empty-hint">Click any result to open the original page beside it.</p>
+        <!-- Wordmark: large in cover state, small + left-aligned when compact -->
+        <div class="masthead">
+          <h1 class="masthead-title">WeHPAH<span class="masthead-bang">!</span></h1>
+          <div class="masthead-extras">
+            <p class="masthead-tagline"><em>(we have pinpoint at home!)</em> &mdash; every answer lands on the page it came from</p>
+            <p class="masthead-facts">Investigations Lab &middot; CEC docket 19-SPPE-04 &middot; 283 documents &middot; 93,167 passages</p>
+          </div>
         </div>
+
+        <!-- One search bar, three ways to ask -->
+        <div class="search-hero">
+          <div class="search-field">
+            <svg class="search-glyph" viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round">
+              <circle cx="8.5" cy="8.5" r="5.75"></circle>
+              <path d="M13 13l4.5 4.5"></path>
+            </svg>
+            <input id="search-input" type="text" autocomplete="off" spellcheck="false"
+                   placeholder="Search names, dates, statute numbers, or exact phrases&hellip;"
+                   aria-label="Search the record" />
+            <button id="search-button" class="search-go" type="button">Search</button>
+          </div>
+
+          <nav class="mode-switcher" role="tablist" aria-label="Search mode">
+            <button class="pill active" data-mode="exact" role="tab" aria-selected="true"><span class="pill-no">1</span>Find Exact Words</button>
+            <button class="pill" data-mode="concepts" role="tab" aria-selected="false"><span class="pill-no">2</span>Explore Concepts</button>
+            <button class="pill" data-mode="dossier" role="tab" aria-selected="false"><span class="pill-no">3</span>Ask the Dossier</button>
+          </nav>
+
+          <!-- Lives outside the collapsible footnotes so mode 3 stays labeled
+               as experimental in the compact strip too -->
+          <div id="experimental-warning" class="experimental-warning" hidden role="alert">
+            <span class="warn-dot" aria-hidden="true"></span>Experimental feature &mdash; check every answer against its page
+          </div>
+
+          <div class="search-footnotes">
+            <p id="helper-copy" class="helper-copy"><em>Finds documents containing your exact words, just like Ctrl+F across every file at once.</em></p>
+          </div>
+
+          <button id="expand-header" class="expand-header" type="button" aria-label="Expand search cover" title="Back to the full search cover" aria-expanded="false">
+            <svg viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M5 7.5l5-5 5 5M10 2.5V17.5"></path>
+            </svg>
+          </button>
+        </div>
+
       </div>
-    </section>
+      <div id="status-bar" class="status-bar" role="status" aria-live="polite"></div>
+    </header>
 
-    <!-- §5.5 Right Pane: The Grounding Stage -->
-    <section id="right-pane" class="right-pane" aria-label="Original document viewer">
-      <div class="stage-header">
-        <div id="stage-doc-title" class="stage-doc-title">No document open</div>
-        <div class="stage-controls">
-          <button id="page-prev" class="ghost" disabled>&lsaquo; Prev</button>
-          <span id="page-counter" class="page-counter">&mdash;</span>
-          <button id="page-next" class="ghost" disabled>Next &rsaquo;</button>
-          <span class="control-sep"></span>
-          <button id="zoom-toggle" class="ghost" disabled>Fit Width</button>
-          <span class="control-sep"></span>
-          <a id="download-pdf" class="ghost download-link" hidden
-             download="document.pdf">Download Original PDF</a>
+    <!-- ============ Workspace: evidence stream + grounding stage ============ -->
+    <main class="workspace">
+      <!-- Left: the evidence stream -->
+      <section id="left-pane" class="left-pane" aria-label="Evidence stream">
+        <div class="results-head">
+          <p id="results-count" class="results-count" hidden></p>
         </div>
-      </div>
-      <div id="stage-scroll" class="stage-scroll">
-        <div id="stage-empty" class="stage-empty">
-          <p>Click any evidence card to open the cited page here.</p>
+        <div id="dossier-summary" class="dossier-summary" hidden></div>
+        <div id="evidence-stream" class="evidence-stream">
+          <div class="empty-state">
+            <p class="empty-line">Matching passages will collect here.</p>
+            <p class="empty-hint">Search above &mdash; each result opens its original page, with the exact words highlighted.</p>
+          </div>
         </div>
-        <div id="canvas-wrap" class="canvas-wrap" hidden>
-          <canvas id="pdf-canvas"></canvas>
-          <div id="bbox-layer" class="bbox-overlay-layer"></div>
+      </section>
+
+      <!-- Right: the grounding stage -->
+      <section id="right-pane" class="right-pane" aria-label="Original document viewer">
+        <div class="stage-head">
+          <div id="stage-doc-title" class="stage-doc-title">No document open</div>
+          <div class="stage-controls">
+            <button id="page-prev" class="ghost" disabled aria-label="Previous page">
+              <svg viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12.5 4l-6 6 6 6"></path></svg>
+              <span>Prev</span>
+            </button>
+            <span id="page-counter" class="page-counter">&mdash;</span>
+            <button id="page-next" class="ghost" disabled aria-label="Next page">
+              <span>Next</span>
+              <svg viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M7.5 4l6 6-6 6"></path></svg>
+            </button>
+            <span class="control-sep" aria-hidden="true"></span>
+            <button id="zoom-toggle" class="ghost mono-btn" disabled>Fit Width</button>
+            <span class="control-sep" aria-hidden="true"></span>
+            <a id="download-pdf" class="ghost download-link mono-btn" hidden
+               download="document.pdf">
+              <svg viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M10 2.5v10M6 9l4 3.5 4-3.5M3.5 16.5h13"></path></svg>
+              <span>Original PDF</span>
+            </a>
+          </div>
         </div>
-      </div>
-    </section>
-  </main>
+        <div id="stage-scroll" class="stage-scroll">
+          <div id="stage-empty" class="stage-empty">
+            <p class="empty-line">The cited page opens here.</p>
+            <p class="empty-hint">Pick a passage on the left &mdash; the original page appears with the exact words highlighted.</p>
+          </div>
+          <figure class="plate-figure" id="plate-figure" hidden>
+            <div id="canvas-wrap" class="canvas-wrap" hidden>
+              <canvas id="pdf-canvas"></canvas>
+              <div id="bbox-layer" class="bbox-overlay-layer"></div>
+            </div>
+            <figcaption id="fig-caption" class="fig-caption"></figcaption>
+          </figure>
+        </div>
+      </section>
+    </main>
+  </div>
 
   <script type="module" src="./src/main.js"></script>
 </body>
