@@ -10,6 +10,7 @@ import * as db from './db_client.js';
 import { CONFIG } from './db_client.js';
 import * as verifier from './verifier.js';
 import * as pdfStage from './pdf_stage.js';
+import * as answerEngine from './answer_engine.js';
 
 // §5.2 The Pedagogical Mode Switcher
 const MODES = {
@@ -239,21 +240,57 @@ async function renderDossier(query, rows) {
   rows.forEach((r) => state.passages.set(r.passage_id, r));
 
   renderEvidenceCards(rows, 'dossier', query);
-  setStatus(rows.length
-    ? 'Summary prepared below — every line cites the page it came from.'
-    : 'No matching passages were found for that question.', false);
-  if (!rows.length) return;
-
-  let claims;
-  if (CONFIG.ENABLE_LLM_SYNTHESIS && (await llmAvailable())) {
-    claims = await synthesizeWithModel(query, rows);          // may be []
+  if (!rows.length) {
+    setStatus('No matching passages were found for that question.', false);
+    return;
   }
+
+  const gpuOK = await answerEngine.webGPUSupported();
+  const engineOn = answerEngine.optedIn() && gpuOK;
+  let claims = null;
+
+  if (engineOn) {
+    try {
+      // One-time model setup (~1.1 GB), reported in plain language; cached afterwards.
+      await answerEngine.ensureReady((p) => {
+        const pct = Math.round((p.progress || 0) * 100);
+        setStatus(`Preparing the answering helper — ${pct}% (one-time download, saved on this device)…`, pct < 100);
+      });
+      setStatus('Reading the record and writing a cited answer…', true);
+      const raw = await answerEngine.generateClaims(query, rows);
+      claims = gateClaims(raw, rows);
+    } catch (err) {
+      console.warn('Answering helper unavailable; showing extracted key passages instead.', err);
+      claims = null;
+    }
+  }
+
+  // Extractive fallback: zero-download, deterministic — also the setup-offer carrier.
   if (!claims || !claims.length) {
-    claims = await extractiveClaims(query, rows);             // zero-download default
+    claims = await extractiveClaims(query, rows);
   }
 
-  renderSummary(query, claims, rows);
+  renderSummary(query, claims, rows, {
+    title: engineOn ? 'Written Answer' : 'Extracted Key Passages',
+    offerSetup: gpuOK && !answerEngine.optedIn(),
+    onEnableEngine: gpuOK && !answerEngine.optedIn()
+      ? () => renderDossier(query, rows)
+      : null,
+  });
+
+  setStatus(claims.length
+    ? (engineOn
+      ? 'Written answer below — every line cites the page it came from.'
+      : 'Summary prepared below — every line cites the page it came from.')
+    : 'No matching passages were found for that question.', false);
   el.summary.hidden = false;
+}
+
+/** Mandatory verification gate (§5.4.4): discard every claim that is not verbatim-grounded. */
+function gateClaims(rawClaims, rows) {
+  const passageById = new Map(rows.map((r) => [r.passage_id, r]));
+  return verifier.verifyClaims(rawClaims, passageById)
+    .map((c) => ({ ...c, passage: passageById.get(c.passage_id) }));
 }
 
 /** One exact sentence per document: the one closest to the question. */
@@ -300,9 +337,9 @@ function dot(a, b) {
   return s;
 }
 
-function renderSummary(query, claims, rows) {
+function renderSummary(query, claims, rows, { offerSetup = false, onEnableEngine = null, title = 'Extracted Key Passages' } = {}) {
   el.summary.innerHTML = `
-    <h2>Extracted Key Passages</h2>
+    <h2>${escapeHtml(title)}</h2>
     <p class="dossier-question">For: “${escapeHtml(query)}”</p>
     <ol id="claim-list"></ol>
   `;
@@ -330,46 +367,19 @@ function renderSummary(query, claims, rows) {
 
     list.appendChild(li);
   }
-}
 
-// ---------- optional on-device synthesis (§5.4.3, off by default) ----------
-let _llm = null;
-async function llmAvailable() {
-  try { return !!(navigator.gpu && navigator.gpu.requestAdapter); } catch { return false; }
-}
-
-async function synthesizeWithModel(query, rows) {
-  try {
-    if (!_llm) {
-      const { pipeline } = await import(
-        'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.3.2'
-      );
-      _llm = await pipeline('text-generation', 'onnx-community/Llama-3.2-1B-Instruct-q4f16',
-        { device: 'webgpu', dtype: 'q4f16' });
-    }
-    const excerpts = rows.map((r, i) =>
-      `[${i + 1}] passage_id=${r.passage_id} (${r.doc_title}, p. ${r.page_number})\n"${excerpt(r.passage_text, 800)}"`
-    ).join('\n\n');
-    const prompt =
-      'You answer questions using ONLY the excerpts provided. ' +
-      'Return ONLY valid JSON, no other text, in this exact shape:\n' +
-      '{"claims":[{"statement":"...","passage_id":"...","verbatim_quote":"..."}]}\n' +
-      'verbatim_quote MUST be copied character-for-character from an excerpt.\n\n' +
-      `Excerpts:\n${excerpts}\n\nQuestion: ${query}\nJSON:`;
-
-    const out = await _llm([{ role: 'user', content: prompt }], { max_new_tokens: 512 });
-    const text = out[0]?.generated_text?.at(-1)?.content || '';
-    const jsonStart = text.indexOf('{');
-    const jsonEnd = text.lastIndexOf('}');
-    if (jsonStart < 0 || jsonEnd <= jsonStart) return [];
-    const parsed = JSON.parse(text.slice(jsonStart, jsonEnd + 1));
-
-    const passageById = new Map(rows.map((r) => [r.passage_id, r]));
-    return verifier.verifyClaims(parsed.claims, passageById)
-      .map((c) => ({ ...c, passage: passageById.get(c.passage_id) }));
-  } catch (err) {
-    console.warn('On-device synthesis unavailable; using extracted key passages.', err);
-    return [];
+  if (offerSetup && onEnableEngine) {
+    const chip = document.createElement('button');
+    chip.type = 'button';
+    chip.className = 'setup-chip';
+    chip.textContent = 'Get full written answers — one-time 1.1 GB setup, saved on this device';
+    chip.addEventListener('click', async () => {
+      answerEngine.optIn();
+      chip.disabled = true;
+      chip.textContent = 'Setting up the answering helper…';
+      await onEnableEngine();
+    });
+    el.summary.appendChild(chip);
   }
 }
 

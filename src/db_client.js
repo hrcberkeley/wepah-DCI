@@ -13,8 +13,6 @@ export const CONFIG = {
   HF_DATASET_REPO: 'kolenyo/MS_Datacenter',
   // Local base URL of dist_data when no HF repo is configured.
   LOCAL_DATA_BASE: '/dist_data',
-  // Optional local synthesis with an on-device model (off by default; the UI stays identical).
-  ENABLE_LLM_SYNTHESIS: false,
   // Score at or above which a concept match shows as a strong match.
   STRONG_MATCH_THRESHOLD: 0.72,
   MAX_KEYWORD_RESULTS: 25,
