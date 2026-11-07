@@ -128,7 +128,9 @@ function workerSource() {
         } else if (op === 'complete') {
           const res = await engine.chat.completions.create({
             messages: payload.messages,
-            temperature: 0.2,
+            // Greedy decoding + fixed seed: same question and passages give the same answer.
+            temperature: 0,
+            seed: 42,
             max_tokens: payload.maxTokens ?? 700,
             response_format: payload.responseFormat,
             extra_body: { enable_thinking: false },
@@ -252,11 +254,11 @@ function buildMessages(question, rows) {
       content:
         'Answer the question using ONLY the numbered excerpts below.\n' +
         'Rules:\n' +
-        '- Produce a direct answer in 2 to 4 complementary claims. Include important qualifications or contrary evidence.\n' +
+        '- Answer the question directly in 2 to 4 claims, in plain English, ordered so they read as one answer. Include important qualifications or contrary evidence.\n' +
         '- Each claim must be supported by ONE excerpt. Never combine facts from different excerpts in one claim.\n' +
-        '- claim.statement: copy ONE complete sentence from the cited excerpt, character-for-character. Do not paraphrase it.\n' +
+        '- claim.statement: one sentence that answers part of the question. You may rephrase, but reuse the excerpt\'s own words and copy every name, number, date and negation exactly. Add nothing the quote does not say.\n' +
         '- claim.passage_id: copy the passage_id of the excerpt you used, character-for-character.\n' +
-        '- claim.verbatim_quote: copy a contiguous supporting span from that excerpt, character-for-character, containing the complete statement and its immediate qualification where present.\n' +
+        '- claim.verbatim_quote: copy the contiguous span from that excerpt that supports the statement, character-for-character.\n' +
         '- If the excerpts do not answer the question, return {"claims":[]}.\n\n' +
         `Question: ${question}\n\nExcerpts:\n${excerpts}`,
     },

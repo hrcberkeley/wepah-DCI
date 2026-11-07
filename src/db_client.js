@@ -5,16 +5,15 @@
 export const CONFIG = {
   // Streams everything from the Hugging Face dataset repo (PDFs, Parquet, centroids);
   // keyword search uses the Datasets-Server BM25 endpoint. Set '' to stream locally.
-  HF_DATASET_REPO: 'kolenyo/MS_Datacenter',
+  // Add ?local to the page URL to preview a freshly built dist_data/ before uploading it.
+  HF_DATASET_REPO: new URLSearchParams(location.search).has('local') ? '' : 'kolenyo/MS_Datacenter',
   // Local base URL of dist_data when no HF repo is configured.
   LOCAL_DATA_BASE: '/dist_data',
   MAX_KEYWORD_RESULTS: 25,
   MAX_CONCEPT_RESULTS: 15,
-  DOSSIER_PASSAGES: 6,
   // Cross-encoder re-ranking pool for Ask the Dossier (retrieval quality pass).
   RERANKER_MODEL: 'Xenova/ms-marco-MiniLM-L-6-v2',
-  RERANKER_CANDIDATES: 40,
-  RERANKER_KEYWORD_SHARE: 12,   // of the candidate pool; the rest comes from concept search
+  RERANKER_KEYWORD_SHARE: 0.3,  // of the candidate pool; the rest comes from concept search
 };
 let activeDossier = null;
 let _parquetSeq = 0;
@@ -262,7 +261,7 @@ export async function keywordSearch(query, limit = CONFIG.MAX_KEYWORD_RESULTS) {
 }
 
 // ---------- Mode 2: Explore Concepts (§4.3, centroid-routed) ----------
-export async function conceptSearch(query, limit = CONFIG.MAX_CONCEPT_RESULTS) {
+export async function conceptSearch(query, limit = CONFIG.MAX_CONCEPT_RESULTS, minChars = 0) {
   if (!_centroids || !_centroids.clusters.length) throw new Error('Centroid index not loaded');
 
   // 1. Query vector, computed in the browser worker
@@ -293,7 +292,7 @@ export async function conceptSearch(query, limit = CONFIG.MAX_CONCEPT_RESULTS) {
     SELECT ${METADATA_COLUMNS},
            array_cosine_similarity(CAST(embedding AS FLOAT[384]), ${vecLiteral}) AS score
     FROM read_parquet(${parquetSource()})
-    WHERE cluster_id IN (${c1Safe}, ${c2Safe})
+    WHERE cluster_id IN (${c1Safe}, ${c2Safe}) AND length(passage_text) >= ${Number(minChars) || 0}
     ORDER BY score DESC, passage_id ASC
     LIMIT ${limit};
   `;
@@ -372,8 +371,8 @@ async function tokenSearch(query, limit) {
  *  Callers slice/select from this pool (e.g., after cross-encoder re-ranking).
  *  Queries run sequentially — one AsyncDuckDBConnection serializes its messages and
  *  concurrent queries can deadlock the worker. */
-export async function candidatePassages(query, k = CONFIG.RERANKER_CANDIDATES) {
-  const kwN = Math.min(CONFIG.RERANKER_KEYWORD_SHARE, k);
+export async function candidatePassages(query, k = 40) {
+  const kwN = Math.min(Math.round(k * CONFIG.RERANKER_KEYWORD_SHARE), k);
   const csN = Math.max(0, k - kwN);
   const seen = new Set();
   const pool = [];
@@ -388,7 +387,7 @@ export async function candidatePassages(query, k = CONFIG.RERANKER_CANDIDATES) {
   };
   try { pushAll(await tokenSearch(query, kwN)); } catch (err) { console.warn('token search failed:', err); }
   try { pushAll(await keywordSearch(query, 4)); } catch (err) { console.warn('phrase search failed:', err); }
-  try { pushAll(await conceptSearch(query, csN)); } catch (err) { console.warn('concept search failed:', err); }
+  try { pushAll(await conceptSearch(query, csN, 120)); } catch (err) { console.warn('concept search failed:', err); }
   if (!pool.length) throw new Error('All search methods failed');
   return pool;
 }

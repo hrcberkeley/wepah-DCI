@@ -46,8 +46,52 @@ export function verifyClaims(claims, passageById) {
  * same gate as model claims.
  */
 export function sentenceCandidates(passageText) {
-  return normalizeWhitespace(passageText)
-    .split(/(?<=[.;:!?])\s+(?=[A-Z(“"\d])/)
+  // Line breaks separate a heading from its paragraph: never glue them into one sentence.
+  return String(passageText ?? '').split(/\n+/).map(normalizeWhitespace)
+    .flatMap((line) => line.split(/(?<=[.;:!?])\s+(?=[A-Z(“"\d])/))
     .map((s) => s.trim())
     .filter((s) => s.length > 40);
+}
+
+// ---------- support gate for written (rephrased) claims ----------
+// A rephrased statement may change connective wording, but every fact in it
+// must come from its cited quote. Deterministic lexical rules:
+//   • every number in the statement appears in the quote,
+//   • every capitalized name (not sentence-initial) appears in the quote,
+//   • negation agrees (no added or dropped "not"/"no"/"never"…),
+//   • ≥ 75% of remaining content words share a 4-letter stem with the quote.
+// ponytail: lexical, not semantic — can't catch a reordered "A sued B" vs "B sued A";
+// add a cross-encoder entailment check if that ever shows up in practice.
+const STOP = new Set(('the a an and or of to in on at by for with from as is are was were be been being ' +
+  'this that these those it its their them they he she his her there which who whom whose what when where ' +
+  'why how than then also such any all each per into onto upon under over about after before between ' +
+  'during within shall will would should could may might must can has have had do does did so if but ' +
+  'because while both other only same').split(' '));
+const NEGATION = /\b(not|no|never|nor|none|neither|without|cannot)\b|n't\b/i;
+
+function tokens(text) {
+  return normalizeWhitespace(text).replace(/(\d),(\d)/g, '$1$2').match(/[A-Za-z0-9][A-Za-z0-9'-]*/g) || [];
+}
+const stem = (w) => w.toLowerCase().replace(/'s$/, '').slice(0, 4);
+
+export function isSupported(statement, quote) {
+  const st = tokens(statement);
+  const qt = tokens(quote);
+  const quoteWords = new Set(qt.map((w) => w.toLowerCase()));
+  const quoteStems = new Set(qt.map(stem));
+  if (NEGATION.test(statement) !== NEGATION.test(quote)) return false;
+
+  let content = 0;
+  let covered = 0;
+  st.forEach((word, i) => {
+    const lower = word.toLowerCase();
+    if (/\d/.test(word) || (i > 0 && /^[A-Z]/.test(word) && !STOP.has(lower))) {
+      if (!quoteWords.has(lower)) content = Infinity; // invented number/name: hard fail
+      return;
+    }
+    if (lower.length < 3 || STOP.has(lower) || NEGATION.test(lower)) return;
+    content += 1;
+    if (quoteStems.has(stem(lower))) covered += 1;
+  });
+  return content >= 2 && content !== Infinity && covered / content >= 0.75;
 }

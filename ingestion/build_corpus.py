@@ -123,6 +123,54 @@ def validate_rows(rows: list[dict]) -> None:
             raise ValueError(f"Invalid bounding box for {pid}: {(x, y, w, h)}")
 
 
+# Passages shorter than this (headings, labels, list items, stray numbers) are
+# merged into the text that follows them on the same page, so a heading travels
+# with its paragraph and the embedding carries that context.
+MIN_PASSAGE_CHARS = 200
+MAX_PASSAGE_CHARS = 1500
+
+
+def merge_short_passages(rows: list[dict]) -> list[dict]:
+    """Greedy, order-preserving: keep appending consecutive same-page text rows
+    while the passage is still short. Tables and figures are never merged.
+    The merged passage keeps the first item's ID and the union of the boxes."""
+    # ponytail: length heuristic, not docling's heading label (not in the cache);
+    # store item labels at extraction if merges ever join unrelated columns.
+    out: list[dict] = []
+    for row in rows:
+        prev = out[-1] if out else None
+        if (prev and row["content_type"] == "text" and prev["content_type"] == "text"
+                and prev["doc_id"] == row["doc_id"] and prev["page_number"] == row["page_number"]
+                and len(prev["passage_text"]) < MIN_PASSAGE_CHARS
+                and len(prev["passage_text"]) + len(row["passage_text"]) <= MAX_PASSAGE_CHARS):
+            x0 = min(prev["bbox_x_pct"], row["bbox_x_pct"])
+            y0 = min(prev["bbox_y_pct"], row["bbox_y_pct"])
+            x1 = max(prev["bbox_x_pct"] + prev["bbox_w_pct"], row["bbox_x_pct"] + row["bbox_w_pct"])
+            y1 = max(prev["bbox_y_pct"] + prev["bbox_h_pct"], row["bbox_y_pct"] + row["bbox_h_pct"])
+            out[-1] = {**prev, "passage_text": f'{prev["passage_text"]}\n{row["passage_text"]}',
+                       "bbox_x_pct": x0, "bbox_y_pct": y0,
+                       "bbox_w_pct": min(1.0, x1) - x0, "bbox_h_pct": min(1.0, y1) - y0}
+        else:
+            out.append(dict(row))
+    return out
+
+
+def _check_merge() -> None:
+    base = {"doc_id": "d", "doc_title": "D", "doc_date": "Undated", "content_type": "text",
+            "bbox_x_pct": 0.1, "bbox_w_pct": 0.8, "bbox_h_pct": 0.02}
+    rows = [
+        {**base, "passage_id": "d_p1_i0", "page_number": 1, "passage_text": "3.1. Water use", "bbox_y_pct": 0.10},
+        {**base, "passage_id": "d_p1_i1", "page_number": 1, "passage_text": "x" * 300, "bbox_y_pct": 0.13},
+        {**base, "passage_id": "d_p1_i2", "page_number": 1, "passage_text": "y" * 300, "bbox_y_pct": 0.20},
+        {**base, "passage_id": "d_p2_i3", "page_number": 2, "passage_text": "Next page", "bbox_y_pct": 0.05},
+        {**base, "passage_id": "d_p2_i4", "page_number": 2, "content_type": "table", "passage_text": "|a|", "bbox_y_pct": 0.3},
+    ]
+    merged = merge_short_passages(rows)
+    assert [r["passage_id"] for r in merged] == ["d_p1_i0", "d_p1_i2", "d_p2_i3", "d_p2_i4"], merged
+    assert merged[0]["passage_text"].startswith("3.1. Water use\n") and abs(merged[0]["bbox_h_pct"] - 0.05) < 1e-9
+    validate_rows(merged)
+
+
 def verify_ocr_available() -> None:
     """Fail early when macOS Vision silently returns no observations (e.g. sandbox denial)."""
     if sys.platform != "darwin":
@@ -677,6 +725,11 @@ def main() -> None:
     if not all_rows:
         raise ValueError("no rows extracted")
     validate_rows(all_rows)
+    _check_merge()
+    before = len(all_rows)
+    all_rows = merge_short_passages(all_rows)
+    validate_rows(all_rows)
+    print(f"[merge] {before} items -> {len(all_rows)} passages (short items joined to the text that follows)", flush=True)
 
     # Build and verify a complete release alongside the existing one before publishing it.
     global DIST_DATA_DIR, PDFS_OUT_DIR, CENTROIDS_PATH, CORPUS_PARQUET_PATH
@@ -710,7 +763,7 @@ def main() -> None:
                       "force_full_page_ocr": False,
                       "embedding_tools": versions("sentence-transformers", "transformers", "torch"),
                       "embedding_model": EMBED_MODEL_ID, "embedding_revision": model_revision, "cluster_tools": versions("scikit-learn", "duckdb"),
-                      "cluster_random_state": RANDOM_STATE, "cluster_divisor": CLUSTER_DIVISOR},
+                      "cluster_random_state": RANDOM_STATE, "min_passage_chars": MIN_PASSAGE_CHARS, "max_passage_chars": MAX_PASSAGE_CHARS, "cluster_divisor": CLUSTER_DIVISOR},
         }
         atomic_json(staging / "dossier.json", manifest)
         verify_corpus()

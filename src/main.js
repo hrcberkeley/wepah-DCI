@@ -217,8 +217,7 @@ async function runSearch() {
         ? `Found ${rows.length} related passage${rows.length === 1 ? '' : 's'}. Click a card to see the original page.`
         : 'Nothing closely related yet. Try describing the topic with different words.', false);
     } else {
-      const rows = await selectBestPassages(query);
-      await renderDossier(query, rows);
+      await startDossier(query);
     }
   } catch (err) {
     console.error(err);
@@ -366,18 +365,32 @@ function openGrounding(row) {
 
 // ---------- Ask the Dossier (§5.4) ----------
 
-/**
- * Cross-encoder re-ranking (§ retrieval quality): pull a wide candidate pool,
- * score every (question, passage) pair with bge-reranker, keep the best 6.
- * Falls back to plain hybrid retrieval if the reranker can't load or score.
- */
-async function selectBestPassages(query) {
-  const candidates = await db.candidatePassages(query, CONFIG.RERANKER_CANDIDATES);
-  // Drop table-cell fragments — they carry no answer and pollute the prompt.
-  const pool = candidates.filter((r) => (r.passage_text || '').length >= 200);
-  const use = pool.length >= CONFIG.DOSSIER_PASSAGES ? pool : candidates;
-  if (use.length <= CONFIG.DOSSIER_PASSAGES) return use;
+// The answering helper reads BATCH passages at a time (that is what fits its
+// working memory); thoroughness sets how many it reads before the first answer
+// and how wide the pool of candidate passages is. "Read 6 more" extends either.
+const BATCH = 6;
+const DEPTHS = {
+  quick: { label: 'Quick', hint: 'about 15 seconds', candidates: 40, read: 6 },
+  thorough: { label: 'Thorough', hint: 'about a minute', candidates: 100, read: 18 },
+  exhaustive: { label: 'Exhaustive', hint: 'several minutes', candidates: 250, read: 60 },
+};
+const DEPTH_KEY = 'wehpah-dossier-depth';
+const SHORT_PASSAGE = 120;
 
+function currentDepth() {
+  try { const d = localStorage.getItem(DEPTH_KEY); return DEPTHS[d] ? d : 'quick'; } catch { return 'quick'; }
+}
+
+const normText = (t) => verifier.normalizeWhitespace(t).toLowerCase();
+
+/**
+ * Wide candidate pool, scored against the question by the cross-encoder, best
+ * first. Identical text filed in several documents collapses into one passage
+ * that remembers its copies; short fragments rank after every real passage.
+ */
+async function rankPassages(query, depth) {
+  const candidates = await db.candidatePassages(query, DEPTHS[depth].candidates);
+  let scores = null;
   try {
     setStatus('Double-checking which passages matter most…', true);
     await reranker.ensureReady((p) => {
@@ -386,92 +399,113 @@ async function selectBestPassages(query) {
         setStatus(`Preparing the passage double-checker — ${pct}% (one-time download, saved on this device)…`, pct < 100);
       }
     });
-    const scores = await reranker.rank(
-      query,
-      pool.map((r) => excerpt(r.passage_text, 1000)),
-      (p) => {
-        const pct = p.total ? Math.round((p.done / p.total) * 100) : 0;
-        setStatus(`Reading the ${p.total} closest passages against your question — ${pct}%…`, pct < 100);
-      }
-    );
-    const ranked = pool
-      .map((row, i) => ({ row, score: scores[i] ?? Number.NEGATIVE_INFINITY }))
-      .sort((a, b) => b.score - a.score);
-    const seenText = new Set();
-    return ranked.filter(({ row }) => {
-      const key = (row.passage_text || '').replace(/\s+/g, ' ').trim().toLowerCase().slice(0, 220);
-      if (seenText.has(key)) return false;
-      seenText.add(key);
-      return true;
-    }).slice(0, CONFIG.DOSSIER_PASSAGES).map((x) => x.row);
+    scores = await reranker.rank(query, candidates.map((r) => excerpt(r.passage_text, 1000)), (p) => {
+      const pct = p.total ? Math.round((p.done / p.total) * 100) : 0;
+      setStatus(`Reading the ${p.total} closest passages against your question — ${pct}%…`, pct < 100);
+    });
   } catch (err) {
     console.warn('Re-ranking unavailable; using plain hybrid retrieval.', err);
-    return pool.slice(0, CONFIG.DOSSIER_PASSAGES);
   }
+  // Stable sort: without scores, the retrieval order stands.
+  const ranked = candidates
+    .map((row, i) => ({ row, score: Number.isFinite(scores?.[i]) ? scores[i] : Number.NEGATIVE_INFINITY }))
+    .sort((a, b) => b.score - a.score)
+    .map((x) => x.row);
+
+  const byText = new Map();
+  const unique = [];
+  for (const row of ranked) {
+    const key = normText(row.passage_text).slice(0, 220);
+    const first = byText.get(key);
+    if (first) {
+      if (row.doc_id !== first.doc_id && !first.alsoIn.some((r) => r.doc_id === row.doc_id)) first.alsoIn.push(row);
+      continue;
+    }
+    const copy = { ...row, alsoIn: [] };
+    byText.set(key, copy);
+    unique.push(copy);
+  }
+  const long = (r) => (r.passage_text || '').length >= SHORT_PASSAGE;
+  return [...unique.filter(long), ...unique.filter((r) => !long(r))];
 }
 
-async function renderDossier(query, rows) {
-  state.passages.clear();
-  rows.forEach((r) => state.passages.set(r.passage_id, r));
+let run = null;   // the answer currently on screen
 
-  renderEvidenceCards(rows, 'dossier', query);
-  if (!rows.length) {
+async function startDossier(query) {
+  const depth = currentDepth();
+  const ranked = await rankPassages(query, depth);
+  const r = {
+    query, depth, ranked, read: 0, claims: [], busy: false, stopped: false,
+    gpuOK: await answerEngine.webGPUSupported(),
+  };
+  run = r;
+  if (!ranked.length) {
+    renderEvidenceCards([], 'dossier', query);
+    el.summary.hidden = true;
     setStatus('No matching passages were found for that question.', false);
     return;
   }
+  await readMore(r, DEPTHS[depth].read);
+}
 
-  const gpuOK = await answerEngine.webGPUSupported();
-  const engineOn = answerEngine.optedIn() && gpuOK;
-  let claims = null;
-  let usedModel = false;
+/** Read the next `count` passages in batches, adding verified claims as they arrive. */
+async function readMore(r, count) {
+  r.busy = true;
+  r.stopped = false;
+  const target = Math.min(r.ranked.length, r.read + count);
+  renderRun(r);
+  while (r.read < target && !r.stopped && run === r) {
+    const batch = r.ranked.slice(r.read, Math.min(target, r.read + BATCH));
+    setStatus(`Reading passages ${r.read + 1}–${r.read + batch.length} of ${r.ranked.length}…`, true);
+    const claims = await answerBatch(r, batch);
+    r.read += batch.length;
+    for (const claim of claims) addClaim(r, claim);
+    if (run === r) renderRun(r);
+  }
+  r.busy = false;
+  if (run !== r) return;
+  renderRun(r);
+  setStatus(r.claims.length || r.read
+    ? 'Answer written — every line is checked against the page it cites.'
+    : 'No matching passages were found for that question.', false);
+}
 
-  if (engineOn) {
+/** Claims for one batch: the answering helper when it is on, otherwise exact sentences. */
+async function answerBatch(r, rows) {
+  if (answerEngine.optedIn() && r.gpuOK) {
     try {
       // One-time model setup (tiered by device, ~0.9–2.5 GB), cached afterwards.
       await answerEngine.ensureReady((p) => {
         const pct = Math.round((p.progress || 0) * 100);
         setStatus(`Preparing the answering helper — ${pct}% (one-time download, saved on this device)…`, pct < 100);
       });
-      setStatus('Reading the record and writing a cited answer…', true);
-      const raw = await answerEngine.generateClaims(query, rows);
-      claims = gateClaims(raw, rows);
-      usedModel = claims.length > 0;
+      setStatus(`Reading passages ${r.read + 1}–${r.read + rows.length} of ${r.ranked.length} and writing a cited answer…`, true);
+      return gateClaims(await answerEngine.generateClaims(r.query, rows), rows)
+        .map((c) => ({ ...c, written: true }));
     } catch (err) {
       console.warn('Answering helper unavailable; showing extracted key passages instead.', err);
-      claims = null;
     }
   }
-
-  // Extractive fallback: deterministic and available without another download.
-  if (!claims || !claims.length) {
-    claims = extractiveClaims(query, rows);
-  }
-
-  renderSummary(query, claims, rows, {
-    title: usedModel ? 'Selected Source Passages' : 'Extracted Key Passages',
-    offerSetup: gpuOK && !usedModel,
-    onEnableEngine: gpuOK && !usedModel
-      ? () => renderDossier(query, rows)
-      : null,
-  });
-
-  setStatus(claims.length
-    ? (usedModel
-      ? 'Source passages selected — every line cites the page it came from.'
-      : 'Summary prepared below — every line cites the page it came from.')
-    : 'No matching passages were found for that question.', false);
-  el.summary.hidden = false;
+  return extractiveClaims(r.query, rows);
 }
 
-/** A displayed statement must itself occur in the cited quote. Quote presence
- * alone cannot establish that a paraphrase follows from the source. */
+/** Skip a claim that repeats (or is contained in) one already shown. */
+function addClaim(r, claim) {
+  const text = normText(claim.statement);
+  const dup = r.claims.findIndex((c) => { const o = normText(c.statement); return o.includes(text) || text.includes(o); });
+  if (dup < 0) r.claims.push(claim);
+  else if (text.length > normText(r.claims[dup].statement).length) r.claims[dup] = claim;
+}
+
+/** The quote must occur verbatim in its passage, and the written statement must
+ * pass verifier.isSupported against that quote (no new numbers, names or negations). */
 function gateClaims(rawClaims, rows) {
   const passageById = new Map(rows.map((r) => [r.passage_id, r]));
   const verified = verifier.verifyClaims(rawClaims, passageById)
     .filter((claim) => {
       const statement = verifier.normalizeWhitespace(claim.statement);
       const quote = verifier.normalizeWhitespace(claim.verbatim_quote);
-      return statement.length >= 40 && verifier.isGrounded(statement, quote);
+      return statement.length >= 20 && verifier.isSupported(statement, quote);
     });
   const distinct = [];
   for (const claim of verified) {
@@ -525,14 +559,43 @@ function extractiveClaims(query, rows) {
     .map((c) => ({ ...c, passage: passageById.get(c.passage_id) }));
 }
 
-function renderSummary(query, claims, rows, { offerSetup = false, onEnableEngine = null, title = 'Extracted Key Passages' } = {}) {
-  el.summary.innerHTML = `
-    <h2>${escapeHtml(title)}</h2>
-    <p class="dossier-q">For “${escapeHtml(query)}”</p>
-    <ol id="claim-list"></ol>
-  `;
-  const list = el.summary.querySelector('#claim-list');
+function renderRun(r) {
+  const readRows = r.ranked.slice(0, r.read);
+  renderEvidenceCards(readRows, 'dossier', r.query);
 
+  // With the helper on, an empty answer means "nothing here answers it";
+  // still show the most relevant exact sentences rather than an empty plate.
+  const written = r.claims.some((c) => c.written);
+  const claims = r.claims.length || r.busy ? r.claims : extractiveClaims(r.query, readRows.slice(0, BATCH));
+  const docs = new Set(readRows.map((row) => row.doc_id)).size;
+
+  el.summary.innerHTML = `
+    <h2>${written ? 'Answer from the Record' : 'Extracted Key Passages'}</h2>
+    <p class="dossier-q">For “${escapeHtml(r.query)}”</p>
+    <div class="depth-choice" role="group" aria-label="How thorough"></div>
+    <ol id="claim-list"></ol>
+    <p class="dossier-coverage">Read ${r.read} of ${r.ranked.length} closest passages · ${docs} document${docs === 1 ? '' : 's'}</p>
+  `;
+
+  const choice = el.summary.querySelector('.depth-choice');
+  for (const [key, d] of Object.entries(DEPTHS)) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'depth-option';
+    b.textContent = d.label;
+    b.title = d.hint;
+    b.setAttribute('aria-pressed', String(key === r.depth));
+    b.disabled = r.busy;
+    b.addEventListener('click', () => {
+      if (key === r.depth) return;
+      try { localStorage.setItem(DEPTH_KEY, key); } catch { /* private mode */ }
+      el.input.value = r.query;
+      runSearch();
+    });
+    choice.appendChild(b);
+  }
+
+  const list = el.summary.querySelector('#claim-list');
   for (const claim of claims) {
     const passage = claim.passage || state.passages.get(claim.passage_id);
     if (!passage) continue;
@@ -544,8 +607,8 @@ function renderSummary(query, claims, rows, { offerSetup = false, onEnableEngine
     text.textContent = claim.statement;
     li.appendChild(text);
 
-    // Gold verification chip on its own line under the sentence: hover quotes
-    // the verbatim source, click opens the cited page.
+    // Gold verification chip on its own line under the sentence: hover quotes the
+    // verbatim source, click opens the cited page.
     const pill = document.createElement('button');
     pill.type = 'button';
     pill.className = 'verify-pill';
@@ -555,10 +618,35 @@ function renderSummary(query, claims, rows, { offerSetup = false, onEnableEngine
     pill.addEventListener('click', () => openGrounding(passage));
     li.appendChild(pill);
 
+    if (passage.alsoIn?.length) {
+      const also = document.createElement('span');
+      also.className = 'claim-also';
+      const n = passage.alsoIn.length;
+      also.textContent = `Same text in ${n} other filing${n === 1 ? '' : 's'}`;
+      also.title = passage.alsoIn.map((row) => `${row.doc_title}, p. ${row.page_number}`).join('\n');
+      li.appendChild(also);
+    }
     list.appendChild(li);
   }
 
-  if (offerSetup && onEnableEngine) {
+  if (r.busy) {
+    const stop = document.createElement('button');
+    stop.type = 'button';
+    stop.className = 'read-more';
+    stop.textContent = 'Stop after this batch';
+    stop.addEventListener('click', () => { r.stopped = true; stop.disabled = true; stop.textContent = 'Stopping…'; });
+    el.summary.appendChild(stop);
+  } else if (r.read < r.ranked.length) {
+    const more = document.createElement('button');
+    more.type = 'button';
+    more.className = 'read-more';
+    const n = Math.min(BATCH, r.ranked.length - r.read);
+    more.textContent = `Read ${n} more passage${n === 1 ? '' : 's'}`;
+    more.addEventListener('click', () => readMore(r, BATCH));
+    el.summary.appendChild(more);
+  }
+
+  if (!r.busy && r.gpuOK && !written) {
     const chip = document.createElement('button');
     chip.type = 'button';
     chip.className = 'setup-chip';
@@ -569,14 +657,17 @@ function renderSummary(query, claims, rows, { offerSetup = false, onEnableEngine
     answerEngine.estimateSetupGB().then((gb) => {
       if (gb && !answerEngine.optedIn()) chip.textContent = `Get full written answers — one-time ~${gb} GB setup, saved on this device`;
     }).catch(() => {});
-    chip.addEventListener('click', async () => {
+    chip.addEventListener('click', () => {
       answerEngine.optIn();
       chip.disabled = true;
       chip.textContent = 'Setting up the answering helper…';
-      await onEnableEngine();
+      r.read = 0;
+      r.claims = [];
+      readMore(r, DEPTHS[r.depth].read);
     });
     el.summary.appendChild(chip);
   }
+  el.summary.hidden = false;
 }
 
 boot();
