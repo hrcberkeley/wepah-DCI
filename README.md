@@ -1,157 +1,41 @@
-# Investigations Lab's WeHPAH!
+# WeHPAH!
 
-> **(We have pinpoint at home!)** — a zero-backend legal dossier explorer:
-> search 261 docket PDFs, get cited passages, and see the exact spot on the original page highlighted in gold.
+A browser-based legal dossier explorer. Search passages, open the cited PDF page, and inspect the highlighted source region.
 
-Built to the contract in [`AGENTS.md`](./AGENTS.md) over the CEC San Jose City Data Center docket (19-SPPE-04).
+The current Microsoft Datacenter Dossier contains 283 PDFs and 91,130 passages. The browser uses the public [Hugging Face dataset](https://huggingface.co/datasets/kolenyo/MS_Datacenter) by default.
 
-## Project layout
+## Build or update a dossier
 
-```text
-project-root/
-├── raw_pdfs/                  # 261 source PDFs (moved here from the folder root)
-├── ingestion/
-│   ├── pyproject.toml         # uv-managed Python 3.12 environment
-│   ├── build_corpus.py        # OCR → bbox normalization → embeddings → KMeans → Parquet
-│   └── devserver.py           # range-capable static server for local use
-├── dist_data/                 # deployable artifacts (upload this to Hugging Face)
-│   ├── corpus.parquet         # 85,590 rows, sorted by cluster, ROW_GROUP_SIZE 500, ZSTD
-│   ├── centroids.json         # 64 K-means centroids for browser-side routing
-│   └── pdfs/                  # web-served copies of every PDF
-└── web_app/                   # static vanilla-JS frontend (no build step required)
-    ├── index.html
-    ├── style.css
-    └── src/
-        ├── main.js            # UI controller & progressive disclosure state machine
-        ├── db_client.js       # DuckDB-Wasm + HF Datasets Server hybrid query engine
-        ├── verifier.js        # deterministic quote-grounding verification gate
-        └── pdf_stage.js       # PDF.js renderer with percentage bbox overlays
+Follow the step-by-step [ingestion guide](ingestion/INGESTION.md). It covers adding PDFs, running the builder, checking a release, previewing it, publishing it, and reusing previous processing.
+
+```sh
+uv sync --project ingestion
+uv run --project ingestion python ingestion/build_corpus.py --title "My dossier"
+uv run --project ingestion python ingestion/build_corpus.py --verify-only
 ```
 
-## Quick start (local)
+The builder keeps the existing release until a replacement passes validation. It caches successful extraction by PDF content and settings, and passage representations by text and model revision. The output is `dist_data/` with `dossier.json`, `corpus.parquet`, per-cluster files in `clusters/`, `centroids.json`, and `pdfs/`.
 
-```bash
-# 1. Build the corpus (incremental: extraction is cached per document in ingestion/.cache/)
-cd ingestion
-uv sync
-uv run python build_corpus.py            # full 261-doc run (~30 min on an M4 Max; resumable)
-uv run python build_corpus.py --limit 5  # quick smoke build
-uv run python build_corpus.py --verify-only
+## Run the site locally
 
-# 2. Serve and open
-uv run python devserver.py 8410
-# → http://127.0.0.1:8410/
+```sh
+uv run --project ingestion python ingestion/devserver.py 8410
 ```
 
-`devserver.py` is a plain static server with the extras the zero-download design needs:
-HTTP **206 Partial Content** support, `Accept-Ranges: bytes`, and CORS expose-headers.
-(Python's built-in `http.server` silently ignores Range headers — don't swap it in.)
+Open `http://127.0.0.1:8410/`. The site currently points to the public `kolenyo/MS_Datacenter` dataset in [src/db_client.js](src/db_client.js). Clear `HF_DATASET_REPO` there to search the local `dist_data/`. The local server supports HTTP byte ranges.
 
-## Point the frontend at Hugging Face (zero-local-data mode) — ACTIVE
+## How searches work
 
-`src/db_client.js` uses the live dataset:
+- **Find Exact Words** finds a case-insensitive, literal phrase in `passage_text`. Results have stable document, page, and passage-ID ordering. For public datasets, the Hugging Face search endpoint supplies candidates; each displayed result is then checked for the literal phrase because the endpoint stems words and searches all string fields.
+- **Explore Concepts** computes a query representation in a Web Worker, selects the two closest subject clusters, and ranks their passages. It is a discovery aid: its fixed cluster selection can miss relevant passages.
+- **Ask the Dossier** combines keyword and concept candidates, reranks a candidate pool, and displays source sentences with citations. An optional on-device model selects source sentences; its output must pass the quote and statement checks. If that model is unavailable, the app displays extracted key passages.
 
-```js
-export const CONFIG = {
-  HF_DATASET_REPO: 'kolenyo/MS_Datacenter',
-  ...
-};
-```
+The PDF viewer uses normalized, top-left page coordinates prepared during ingestion. A citation opens the original page and highlights the source item's region. The region can be broader than the exact quoted sentence.
 
-With this set, keyword search uses the HF Datasets-Server BM25 endpoint (once indexing
-finishes for the repo) and Parquet/PDF/centroid URLs resolve to
-`https://huggingface.co/datasets/kolenyo/MS_Datacenter/resolve/main/…`.
+## Transfer behavior and limits
 
-### Refreshing the remote copy after re-ingestion (§3.4)
+The current DuckDB-Wasm version fetched the complete ~69 MB `corpus.parquet` in a local browser test, even after using its URL-registration API. This release includes one small Parquet file per subject cluster. Concept search loads only the two selected cluster files; a local browser test fetched `cluster_29.parquet` and `cluster_17.parquet` without requesting `corpus.parquet`. A public cluster file also returned HTTP 206 for a 1,024-byte range request. Exact-word search asks the Hugging Face service for candidates and checks the literal phrase in each passage; it may miss matches outside the service's candidate window. If that service fails, the app falls back to a Parquet scan, which can download the full file on this DuckDB-Wasm version.
 
-```bash
-hf auth login --token hf_...   # write-scoped token
-hf upload kolenyo/MS_Datacenter dist_data . --repo-type dataset
-```
+The full release was rebuilt and uploaded on 7 November 2026. `--verify-only` passes with no invalid highlight boxes. An OCR environment check was added after an initial sandboxed run omitted text from plan pages; the corrected run recovered the affected documents. Some Docling table-cell and reading-order warnings remain, so dense tables still warrant inspection against the original PDF.
 
-Last upload: 285 files (283 PDFs + corpus.parquet + centroids.json), 1.03 GB,
-verified with a `206 Partial Content` ranged GET against the HF CDN.
-
-## Search modes (§5.2)
-
-| Mode | What it does |
-|---|---|
-| **1. Find Exact Words** | `ILIKE` substring search (or Datasets-Server BM25 when an HF repo is configured), with gold `<mark>` highlighting |
-| **2. Explore Concepts** | Query is embedded in a Web Worker, routed to the 2 nearest of 64 centroids, scored against the matching rows |
-| **3. Ask the Dossier** | Hybrid retrieval (union of both) → **on-device written answer** (see below), every bullet carrying a gold `verify: …` pill that opens the cited page |
-
-**The answering engine.** Ask the Dossier is powered by **Qwen3.5-4B (WebLLM, WebGPU)** — chosen
-after a Nov 2026 leaderboard pass (tiny-model quality per IFEval/BFCL; the same-size Qwen3.5-2B
-gains only ~3 points over the older 1.7B with a "thinking loops" caveat, while the 4B scores
-89.8% IFEval) — running entirely in a Web Worker on the user's machine
-(`web_app/src/answer_engine.js`). First use requires an explicit opt-in (a gold chip on the
-summary box — a device-tiered download of ~0.9–2.5 GB is
-one-time and browser-cached). **Adaptive tiering:** at opt-in the engine probes the GPU
-adapter (limits + vendor) and the reported device memory — capable machines start at the 4B,
-mid machines at Qwen3.5-2B (~1.3 GB), small ones at Qwen3.5-0.8B (~0.9 GB); any failed init
-automatically retries the next smaller tier, and machines where nothing fits keep the
-deterministic extractive fallback. Claims are grammar-constrained to valid JSON via XGrammar
-(`response_format: json_object` + schema) and then pass the §5.4.4 verification gate in
-`verifier.js` — `verbatim_quote` must appear character-for-character in the cited passage,
-and `passage_id` must resolve, or the claim is silently dropped. When WebGPU is unavailable,
-setup fails, or zero claims survive the gate, the deterministic extractive summary
-(best sentence per document, scored with the bge-small encoder) takes over — so the
-feature always produces cited output. Mode 3 also shows an "experimental feature" warning.
-
-**Cross-encoder re-ranking.** Dossier retrieval fetches a ~40-passage pool — token-keyword
-hits (term-frequency scored **and length-normalized**, with dossier-generic words like
-"data/center/project" pruned so they don't crowd out meaningful question words;
-`web_app/src/db_client.js` `candidatePassages`), phrase hits, and centroid-routed concept
-hits — then re-ranks every (question, passage) pair with
-**`Xenova/ms-marco-MiniLM-L-6-v2`** (~25 MB one-time, `web_app/src/reranker.js`) inside a
-Web Worker, keeping the top 6 for the answer. WebGPU fp16 is attempted first with a canary
-that checks a known relevance **ordering** (relevant text must outscore irrelevant text —
-finite-but-degraded fp16 logits fail it and fall back to WASM q8), table-cell fragments
-(<200 chars) are filtered, and DuckDB queries run serialized (one AsyncDuckDBConnection
-deadlocks under concurrent queries). If the reranker can't load or score, the pool's TF
-order is used directly.
-
-## Open another dossier
-
-The cover's dossier selector accepts a public Hugging Face dataset URL or `owner/name`.
-Compatible repositories include `dossier.json`, `centroids.json`, `corpus.parquet`,
-and `pdfs/{doc_id}.pdf`. The manifest has `schema_version: 1`, title, description,
-document and passage counts, model ID (`Xenova/bge-small-en-v1.5`), dimensions (`384`),
-config/split, and paths to those three assets. The existing Parquet column contract
-in `AGENTS.md` still applies. The app checks the manifest and centroid dimensions
-before switching; unsupported datasets leave the current dossier open.
-
-Run ingestion with `--title "My Dossier" --description "Short description"` to write
-the manifest alongside the corpus, then upload the entire `dist_data/` folder.
-San Jose Data Center remains the built-in default. Its manifest is bundled with
-the website; to make its HF repository selectable by URL, upload `dossier.json`
-to `kolenyo/MS_Datacenter` with a write-scoped token.
-
-## Verification status (§6 checklist)
-
-| Check | Status |
-|---|---|
-| 1. `corpus.parquet` + `centroids.json` exist, non-empty | ✅ 93,167 rows / 64 clusters / 283 docs, 0 extraction failures |
-| 2. `0.0 ≤ bbox_*_pct ≤ 1.0` for 100% of rows | ✅ 0 violations; all embeddings 384-d with norm 1.0 |
-| 3. Verify HTTP `206` range streaming | ⚠️ **PDFs: verified locally AND on the HF CDN** (`206` + `Content-Range` on ranged GETs). **Parquet: not achievable as specified** — see below |
-| 4. Card click → right pane renders page with gold box over cited text | ✅ Verified in-browser in local mode and HF mode (e.g. Draft EIR p. 398 of 471 streamed from HF, gold box over the cited "Traffic Impacts" passage) |
-
-### Known spec deviation: DuckDB-Wasm range reads
-
-AGENTS.md §4.3 assumes DuckDB-Wasm fetches only the byte ranges of the matching row
-groups. In the current DuckDB-Wasm build (`@duckdb/duckdb-wasm@1.32.0`), the browser
-HTTP layer (`lib/src/http_wasm.cc`, `file_page_buffer.cc`) contains **no range-request
-logic** — remote files are fetched with a single full GET and buffered for the session.
-The same query against native DuckDB *does* produce 206s, and this repo's `devserver.py`
-serves correct 206s (verified with curl and native DuckDB), so nothing on the serving
-side is missing. Practical impact: the first concept search downloads `corpus.parquet`
-(~67 MB with embeddings) once; subsequent queries are instant. Keyword search with an
-HF repo configured bypasses the Parquet file entirely via Datasets-Server. If DuckDB-Wasm
-ships range-capable HTTP reads, the existing row-group sort + `ROW_GROUP_SIZE 500` layout
-will pick the benefit up with no further changes.
-
-## Notes
-
-- `GetDocument.aspx` in the project root is **not a PDF** (it's a PowerPoint file); it was left in place and excluded from the corpus.
-- Re-runs are incremental: per-document extraction JSON is cached under `ingestion/.cache/` — delete it (or pass `--force`) to re-OCR from scratch.
-- Coordinates follow §3.2: docling `BOTTOMLEFT` bboxes are converted to top-left fractions of page width/height and clamped to `[0,1]`; the browser never touches raw PDF points.
+For reproducible retrieval evaluation, add a lawyer-reviewed set of questions with known relevant passage IDs and measure candidate recall, final recall, and citation location before adjusting cluster breadth or ranking thresholds.

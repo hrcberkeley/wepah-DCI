@@ -16,7 +16,7 @@ and maintains the explorer.
 
 ## Product Purpose
 
-A zero-backend legal dossier explorer: search 283 docket PDFs (93,167 passages), get
+A zero-backend legal dossier explorer: search 283 docket PDFs (91,130 passages), get
 cited passages, and see the exact spot on the original page highlighted. Success =
 the lawyer finds a passage and verifies it against the original page in one click,
 without ever leaving the browser or trusting an unsourced answer.
@@ -65,7 +65,7 @@ Transformers.js over remote Parquet/PDF range requests); there is no backend.
 
 ## Evidence on Hand
 
-- `dist_data/corpus.parquet` (93,167 rows, 64 clusters, ZSTD, ROW_GROUP_SIZE 500),
+- `dist_data/corpus.parquet` (91,130 rows, 64 clusters, ZSTD) and 64 cluster files,
   `dist_data/centroids.json`, `dist_data/pdfs/` (283 web-served PDFs); mirrored to
   the HF dataset repo (1.03 GB, 285 files, 206-range verified).
 - Docket source PDFs in `raw_pdfs/` (283 files; `GetDocument.aspx` excluded — it is

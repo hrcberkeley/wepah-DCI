@@ -17,6 +17,10 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import hashlib
+import importlib.metadata
+import math
+import tempfile
 import json
 import os
 import re
@@ -67,6 +71,76 @@ CREATE TABLE corpus (
 """
 
 
+CACHE_VERSION = 3
+
+def fingerprint(value) -> str:
+    return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as source:
+        for block in iter(lambda: source.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+def versions(*packages: str) -> dict:
+    result = {}
+    for package in packages:
+        try:
+            result[package] = importlib.metadata.version(package)
+        except importlib.metadata.PackageNotFoundError:
+            result[package] = "not-installed"
+    return result
+
+def atomic_json(path: Path, value) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, temporary = tempfile.mkstemp(dir=path.parent, prefix=".tmp-")
+    try:
+        with os.fdopen(fd, "w") as output:
+            json.dump(value, output, sort_keys=True)
+        os.replace(temporary, path)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+
+def check_slug_collisions(paths: list[Path]) -> None:
+    slugs = {}
+    for path in paths:
+        slug = slugify(path.name)
+        if slug in slugs:
+            raise ValueError(f"PDF filename collision: {slugs[slug]!r} and {path.name!r} both map to {slug!r}")
+        slugs[slug] = path.name
+
+def validate_rows(rows: list[dict]) -> None:
+    seen = set()
+    for row in rows:
+        pid = row["passage_id"]
+        if pid in seen:
+            raise ValueError(f"Duplicate passage ID: {pid}")
+        seen.add(pid)
+        x, y, w, h = (float(row[k]) for k in ("bbox_x_pct", "bbox_y_pct", "bbox_w_pct", "bbox_h_pct"))
+        if not all(math.isfinite(v) and 0 <= v <= 1 for v in (x, y, w, h)) or w <= 0 or h <= 0 or x + w > 1.000001 or y + h > 1.000001:
+            raise ValueError(f"Invalid bounding box for {pid}: {(x, y, w, h)}")
+
+
+def verify_ocr_available() -> None:
+    """Fail early when macOS Vision silently returns no observations (e.g. sandbox denial)."""
+    if sys.platform != "darwin":
+        return
+    from PIL import Image, ImageDraw, ImageFont
+    from ocrmac import ocrmac
+    font_path = "/System/Library/Fonts/Supplemental/Arial.ttf"
+    font = ImageFont.truetype(font_path, 48)
+    image = Image.new("RGB", (1000, 160), "white")
+    ImageDraw.Draw(image).text((30, 35), "DOCUMENT EVIDENCE 12345", fill="black", font=font)
+    with tempfile.NamedTemporaryFile(suffix=".png") as probe:
+        image.save(probe.name)
+        observations = ocrmac.OCR(probe.name, language_preference=["en-US"]).recognize()
+    text = " ".join(str(item[0]) for item in observations).upper()
+    if "DOCUMENT" not in text or "EVIDENCE" not in text:
+        raise RuntimeError("macOS Vision OCR preflight failed; run ingestion outside a sandbox that blocks Vision. No release was changed.")
+
+
 def slugify(filename: str) -> str:
     """Clean filename -> stable doc slug (lowercase alphanumerics + dashes)."""
     stem = Path(filename).stem
@@ -92,7 +166,7 @@ def humanize_title(filename: str) -> str:
 
 
 def extract_date(filename: str, pdf_path: Path) -> str:
-    """Docket filenames embed the filing date; fall back to PDF metadata, then mtime."""
+    """Use a document date only when the name or PDF metadata supplies one."""
     m = TN_DATE_RE.match(Path(filename).stem)
     if m:
         d = m.group(1)
@@ -109,13 +183,9 @@ def extract_date(filename: str, pdf_path: Path) -> str:
                 return f"{m2.group(1)}-{m2.group(2) or '01'}-{m2.group(3) or '01'}"
     except Exception:
         pass
-    try:
-        import datetime
-
-        ts = pdf_path.stat().st_mtime
-        return datetime.datetime.fromtimestamp(ts).strftime("%Y-%m-%d")
-    except Exception:
-        return "Undated"
+    # File modification time describes a copy/download operation, not the
+    # document's date, and changes across machines.
+    return "Undated"
 
 
 # ---------------------------------------------------------------------------
@@ -124,6 +194,7 @@ def extract_date(filename: str, pdf_path: Path) -> str:
 
 _CONVERTER = None
 _CONVERTER_FALLBACK = None
+_OCR_CHECKED = False
 
 
 def _make_converter(pdf_backend: str | None = None):
@@ -142,7 +213,7 @@ def _make_converter(pdf_backend: str | None = None):
     try:
         from docling.datamodel.pipeline_options import OcrMacOptions
 
-        pipeline_options.ocr_options = OcrMacOptions()
+        pipeline_options.ocr_options = OcrMacOptions(force_full_page_ocr=False)
         ocr_engine_used = "ocrmac(AppleVision)"
     except Exception:
         pass
@@ -181,22 +252,32 @@ def normalize_bbox(bbox, page_width: float, page_height: float) -> tuple[float, 
     origin = getattr(bbox, "coord_origin", None)
     l, r = float(bbox.l), float(bbox.r)
     t, b = float(bbox.t), float(bbox.b)
+    if page_width <= 0 or page_height <= 0:
+        raise ValueError("Page dimensions must be positive")
     if origin is not None and str(origin).upper().endswith("BOTTOMLEFT"):
         x_pct = l / page_width
         y_pct = (page_height - t) / page_height
         w_pct = (r - l) / page_width
         h_pct = (t - b) / page_height
-    else:  # TOPLEFT or unknown — treat as top-left
+    elif origin is not None and str(origin).upper().endswith("TOPLEFT"):
         x_pct = l / page_width
         y_pct = t / page_height
         w_pct = (r - l) / page_width
         h_pct = (b - t) / page_height
+    else:
+        raise ValueError(f"Unknown coordinate origin: {origin}")
     clamp = lambda v: max(0.0, min(1.0, v))
-    return clamp(x_pct), clamp(y_pct), clamp(w_pct), clamp(h_pct)
+    left, top = clamp(x_pct), clamp(y_pct)
+    right, bottom = clamp(x_pct + w_pct), clamp(y_pct + h_pct)
+    return left, top, right - left, bottom - top
 
 
 def extract_single_pdf(args: tuple[str, str, str, str]) -> dict:
     """Worker: convert one PDF into cached row dicts (no embeddings yet)."""
+    global _OCR_CHECKED
+    if not _OCR_CHECKED:
+        verify_ocr_available()
+        _OCR_CHECKED = True
     filename, doc_title, doc_date, _ = args
     pdf_path = RAW_PDFS_DIR / filename
     doc_id = slugify(filename)
@@ -206,8 +287,9 @@ def extract_single_pdf(args: tuple[str, str, str, str]) -> dict:
 
     try:
         conv_res = _get_converter().convert(str(pdf_path))
-    except Exception:
-        # Resilience: some legal scans choke the default parser — retry with pypdfium2 backend.
+    except Exception as exc:
+        # Resilience: retry problematic scans with the alternative backend.
+        print(f"[extract] {filename}: primary converter failed ({exc}); retrying fallback", flush=True)
         conv_res = _get_converter(fallback=True).convert(str(pdf_path))
 
     doc = conv_res.document
@@ -226,21 +308,21 @@ def extract_single_pdf(args: tuple[str, str, str, str]) -> dict:
         prov = provs[0]
         page_no = int(prov.page_no)
         if page_no not in page_sizes:
-            continue
+            raise ValueError(f"Missing page dimensions for page {page_no} in {filename}")
         page_w, page_h = page_sizes[page_no]
 
         if isinstance(item, TableItem):
             try:
                 text = item.export_to_markdown(doc)
-            except Exception:
-                text = ""
+            except Exception as exc:
+                raise ValueError(f"Table extraction failed in {filename}, page {page_no}") from exc
             content_type = "table"
         elif isinstance(item, PictureItem):
             caption = ""
             try:
                 caption = (item.caption_text(doc) or "").strip()
-            except Exception:
-                pass
+            except Exception as exc:
+                print(f"[extract] {filename}, page {page_no}: caption lookup failed: {exc}", flush=True)
             if not caption:
                 try:
                     for c in getattr(item, "captions", None) or []:
@@ -248,8 +330,8 @@ def extract_single_pdf(args: tuple[str, str, str, str]) -> dict:
                         if caption.strip():
                             caption = caption.strip()
                             break
-                except Exception:
-                    pass
+                except Exception as exc:
+                    print(f"[extract] {filename}, page {page_no}: caption reference failed: {exc}", flush=True)
             text = f"[Visual Evidence on Page {page_no}]: {caption}" if caption else (
                 f"[Visual Evidence on Page {page_no}]: (figure, stamp, signature or diagram without extractable text)"
             )
@@ -257,7 +339,9 @@ def extract_single_pdf(args: tuple[str, str, str, str]) -> dict:
         else:
             text = (getattr(item, "text", "") or "").strip()
             content_type = "text"
-        if not text:
+        # Isolated OCR punctuation and letters add no useful evidence and can
+        # arrive with point-sized boxes; do not give them citable passage IDs.
+        if not text or (content_type == "text" and len(text.strip()) < 3):
             continue
 
         x, y, w, h = normalize_bbox(prov.bbox, page_w, page_h)
@@ -290,68 +374,94 @@ def extract_single_pdf(args: tuple[str, str, str, str]) -> dict:
 
 
 def stage_extract(file_args: list[tuple[str, str, str, str]], workers: int, force: bool) -> list[dict]:
-    """Extract every PDF, using per-document JSON checkpoints in .cache/."""
-    CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    results: list[dict] = []
-    pending: list[tuple[str, str, str, str]] = []
+    """Cache successful extraction by source bytes and extraction configuration."""
+    cache_dir = CACHE_DIR / "extraction-v2"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    extraction_config = {"version": CACHE_VERSION, "ocr": True, "table_structure": True,
+                         "platform": sys.platform, "force_full_page_ocr": False, "tools": versions("docling", "docling-core", "pypdfium2", "ocrmac")}
+    results, pending = [], []
     for fa in file_args:
-        cache_file = CACHE_DIR / f"{slugify(fa[0])}.json"
+        key = fingerprint({"source_sha256": sha256_file(RAW_PDFS_DIR / fa[0]), "metadata": fa, "config": extraction_config})
+        cache_file = cache_dir / f"{key}.json"
         if cache_file.exists() and not force:
             try:
-                results.append(json.loads(cache_file.read_text()))
-                continue
-            except Exception:
-                pass
-        pending.append(fa)
-
-    print(f"[extract] {len(file_args)} docs total | cached {len(results)} | to process {len(pending)}", flush=True)
+                payload = json.loads(cache_file.read_text())
+                if payload.get("cache_key") == key and not payload.get("error") and payload.get("rows"):
+                    validate_rows(payload["rows"])
+                    results.append(payload)
+                    continue
+            except (OSError, ValueError, KeyError, TypeError):
+                print(f"[extract] invalid checkpoint {cache_file.name}; retrying", flush=True)
+        pending.append((fa, key, cache_file))
+    print(f"[extract] {len(file_args)} docs | cached {len(results)} | to process {len(pending)}", flush=True)
+    failures = []
     if pending:
         with ProcessPoolExecutor(max_workers=workers) as pool:
-            futures = {pool.submit(extract_single_pdf, fa): fa for fa in pending}
-            done = 0
+            futures = {pool.submit(extract_single_pdf, fa): (fa, key, path) for fa, key, path in pending}
             for fut in as_completed(futures):
-                fa = futures[fut]
+                fa, key, cache_file = futures[fut]
                 try:
                     payload = fut.result()
+                    if not payload.get("rows"):
+                        raise ValueError("no passages extracted")
+                    validate_rows(payload["rows"])
+                    payload["cache_key"] = key
+                    atomic_json(cache_file, payload)
+                    results.append(payload)
+                    print(f"[extract] {fa[0]}: {len(payload['rows'])} rows", flush=True)
                 except Exception as exc:
+                    failures.append(f"{fa[0]}: {exc}")
                     print(f"[extract] FAILED {fa[0]}: {exc}", flush=True)
-                    payload = {
-                        "doc_id": slugify(fa[0]), "source_filename": fa[0],
-                        "doc_title": fa[1], "doc_date": fa[2], "n_pages": 0,
-                        "rows": [], "seconds": 0.0, "error": str(exc),
-                    }
-                (CACHE_DIR / f"{payload['doc_id']}.json").write_text(json.dumps(payload))
-                results.append(payload)
-                done += 1
-                print(f"[extract] ({done}/{len(pending)}) {payload['doc_id']}: "
-                      f"{len(payload['rows'])} rows in {payload['seconds']}s", flush=True)
-    results.sort(key=lambda r: r["doc_id"])
-    return results
+    if failures:
+        raise RuntimeError("Extraction failed; existing release left intact. Retry after fixing: " + "; ".join(failures))
+    return sorted(results, key=lambda r: r["doc_id"])
 
 
 # ---------------------------------------------------------------------------
 # Stage B/C: embeddings + K-means
 # ---------------------------------------------------------------------------
 
-def stage_embed_and_cluster(all_rows: list[dict]) -> None:
+def stage_embed_and_cluster(all_rows: list[dict]) -> str:
     """Attach cluster_id to every row; write centroids.json."""
     import numpy as np
 
     texts = [r["passage_text"] for r in all_rows]
-    print(f"[embed] {len(texts)} passages with {EMBED_MODEL_ID} (dim {EMBED_DIM})", flush=True)
-    t0 = time.time()
-    from sentence_transformers import SentenceTransformer
-
-    device = "mps" if sys.platform == "darwin" else "cpu"
-    try:
-        model = SentenceTransformer(EMBED_MODEL_ID, device=device)
-    except Exception:
-        model = SentenceTransformer(EMBED_MODEL_ID, device="cpu")
-    embeddings = model.encode(
-        texts, normalize_embeddings=True, batch_size=64, show_progress_bar=False,
-        convert_to_numpy=True,
-    ).astype(np.float32)
-    print(f"[embed] done in {time.time() - t0:.0f}s", flush=True)
+    from huggingface_hub import snapshot_download
+    model_snapshot = Path(snapshot_download(repo_id=EMBED_MODEL_ID))
+    model_revision = model_snapshot.name
+    embed_config = {"version": CACHE_VERSION, "model": EMBED_MODEL_ID, "revision": model_revision, "dimensions": EMBED_DIM,
+                    "normalize": True, "tools": versions("sentence-transformers", "transformers", "torch")}
+    embed_dir = CACHE_DIR / "embeddings-v2" / fingerprint(embed_config)
+    embed_dir.mkdir(parents=True, exist_ok=True)
+    vectors = {}
+    missing = {}
+    for text in texts:
+        key = hashlib.sha256(text.encode()).hexdigest()
+        path = embed_dir / f"{key}.json"
+        try:
+            vector = json.loads(path.read_text())
+            if len(vector) != EMBED_DIM or not all(math.isfinite(float(v)) for v in vector):
+                raise ValueError("invalid vector")
+            vectors[key] = vector
+        except (OSError, ValueError, TypeError):
+            missing[key] = text
+    if missing:
+        print(f"[embed] computing {len(missing)} new passages; {len(texts) - len(missing)} reused", flush=True)
+        from sentence_transformers import SentenceTransformer
+        device = "mps" if sys.platform == "darwin" else "cpu"
+        try:
+            model = SentenceTransformer(str(model_snapshot), device=device)
+        except Exception:
+            model = SentenceTransformer(str(model_snapshot), device="cpu")
+        keys = list(missing)
+        computed = model.encode([missing[k] for k in keys], normalize_embeddings=True, batch_size=64,
+                                show_progress_bar=False, convert_to_numpy=True).astype(np.float32)
+        if computed.shape != (len(keys), EMBED_DIM) or not np.isfinite(computed).all():
+            raise ValueError("Embedding model returned invalid vectors")
+        for key, vec in zip(keys, computed):
+            vectors[key] = [float(v) for v in vec]
+            atomic_json(embed_dir / f"{key}.json", vectors[key])
+    embeddings = np.asarray([vectors[hashlib.sha256(t.encode()).hexdigest()] for t in texts], dtype=np.float32)
 
     from sklearn.cluster import MiniBatchKMeans
 
@@ -369,11 +479,12 @@ def stage_embed_and_cluster(all_rows: list[dict]) -> None:
             for i in range(len(km.cluster_centers_))
         ],
     }
-    CENTROIDS_PATH.write_text(json.dumps(centroids))
+    atomic_json(CENTROIDS_PATH, centroids)
 
     for row, cid, vec in zip(all_rows, labels, embeddings):
         row["cluster_id"] = int(cid)
         row["_embedding"] = [float(v) for v in vec]
+    return model_revision
 
 
 # ---------------------------------------------------------------------------
@@ -416,12 +527,46 @@ def stage_export(all_rows: list[dict]) -> None:
     print(f"[export] COPY {n} rows -> {CORPUS_PARQUET_PATH} (ROW_GROUP_SIZE 500, ZSTD)", flush=True)
     con.execute(
         f"""
-        COPY (SELECT * FROM corpus ORDER BY cluster_id ASC, doc_id ASC, page_number ASC)
+        COPY (SELECT * FROM corpus ORDER BY cluster_id ASC, doc_id ASC, page_number ASC, passage_id ASC)
         TO '{CORPUS_PARQUET_PATH.as_posix()}'
         (FORMAT PARQUET, ROW_GROUP_SIZE 500, COMPRESSION ZSTD)
         """
     )
+    shard_dir = DIST_DATA_DIR / "clusters"
+    shard_dir.mkdir(parents=True, exist_ok=True)
+    cluster_ids = [int(row[0]) for row in con.execute("SELECT DISTINCT cluster_id FROM corpus ORDER BY cluster_id").fetchall()]
+    for cluster_id in cluster_ids:
+        if not 0 <= cluster_id < MAX_CLUSTERS:
+            raise ValueError(f"Invalid cluster ID: {cluster_id}")
+        shard_path = shard_dir / f"cluster_{cluster_id:02d}.parquet"
+        safe_path = str(shard_path).replace("'", "''")
+        con.execute(f"""COPY (SELECT * FROM corpus WHERE cluster_id = {cluster_id}
+                     ORDER BY doc_id ASC, page_number ASC, passage_id ASC)
+                     TO '{safe_path}' (FORMAT PARQUET, ROW_GROUP_SIZE 500, COMPRESSION ZSTD)""")
     con.close()
+
+
+def verify_shards(con, shard_dir: Path, expected_rows: int) -> None:
+    """Check every shard against the corpus before a release is published."""
+    expected = {int(row[0]): int(row[1]) for row in con.execute(
+        "SELECT cluster_id, COUNT(*) FROM corpus GROUP BY cluster_id").fetchall()}
+    expected_names = {f"cluster_{cid:02d}.parquet" for cid in expected}
+    actual_names = {p.name for p in shard_dir.glob("*.parquet")} if shard_dir.is_dir() else set()
+    if actual_names != expected_names:
+        raise ValueError(f"Shard files do not match corpus clusters: expected {sorted(expected_names)}, found {sorted(actual_names)}")
+    schema = con.execute("DESCRIBE SELECT * FROM corpus").fetchall()
+    total = 0
+    for cid, count in sorted(expected.items()):
+        safe_path = str(shard_dir / f"cluster_{cid:02d}.parquet").replace("'", "''")
+        relation = f"read_parquet('{safe_path}')"
+        if con.execute(f"DESCRIBE SELECT * FROM {relation}").fetchall() != schema:
+            raise ValueError(f"Shard {cid} has a different schema")
+        found, wrong = con.execute(f"SELECT COUNT(*), COUNT(*) FILTER (WHERE cluster_id IS NULL OR cluster_id <> ?) FROM {relation}", [cid]).fetchone()
+        if found != count or wrong:
+            raise ValueError(f"Shard {cid} has invalid row count or membership")
+        total += found
+    if total != expected_rows:
+        raise ValueError(f"Shard row count {total} does not match corpus {expected_rows}")
 
 
 def verify_corpus() -> None:
@@ -431,6 +576,24 @@ def verify_corpus() -> None:
     con = duckdb.connect()
     con.execute(f"CREATE VIEW corpus AS SELECT * FROM read_parquet('{CORPUS_PARQUET_PATH.as_posix()}')")
     n = con.execute("SELECT COUNT(*) FROM corpus").fetchone()[0]
+    manifest_path = DIST_DATA_DIR / "dossier.json"
+    manifest = json.loads(manifest_path.read_text())
+    if manifest.get("schema_version") != 1 or manifest.get("dimensions") != EMBED_DIM or manifest.get("model_id") != CENTROIDS_MODEL_ID:
+        raise ValueError("Unsupported or incompatible dossier manifest")
+    if manifest.get("passage_count") != n:
+        raise ValueError("Manifest passage count does not match corpus")
+    centroids = json.loads(CENTROIDS_PATH.read_text())
+    if centroids.get("dimensions") != EMBED_DIM or centroids.get("model_id") != CENTROIDS_MODEL_ID:
+        raise ValueError("Centroid model does not match the corpus contract")
+    clusters = centroids.get("clusters", [])
+    if not clusters or any(len(c.get("centroid", [])) != EMBED_DIM for c in clusters):
+        raise ValueError("Invalid centroid dimensions")
+    if not {r[0] for r in con.execute("SELECT DISTINCT cluster_id FROM corpus").fetchall()} <= {c["cluster_id"] for c in clusters}:
+        raise ValueError("Centroid IDs do not match corpus clusters")
+    if "clusters_path" in manifest:
+        if manifest["clusters_path"] != "clusters":
+            raise ValueError("Unsupported cluster shard path")
+        verify_shards(con, DIST_DATA_DIR / "clusters", n)
     assert n > 0, "corpus.parquet is empty"
     assert CORPUS_PARQUET_PATH.stat().st_size > 0
     assert CENTROIDS_PATH.stat().st_size > 0
@@ -441,10 +604,12 @@ def verify_corpus() -> None:
             bbox_x_pct < 0.0 OR bbox_x_pct > 1.0 OR
             bbox_y_pct < 0.0 OR bbox_y_pct > 1.0 OR
             bbox_w_pct < 0.0 OR bbox_w_pct > 1.0 OR
-            bbox_h_pct < 0.0 OR bbox_h_pct > 1.0
+            bbox_h_pct <= 0.0 OR bbox_h_pct > 1.0 OR bbox_w_pct <= 0.0 OR
+            bbox_x_pct + bbox_w_pct > 1.000001 OR bbox_y_pct + bbox_h_pct > 1.000001 OR
+            bbox_x_pct IS NULL OR bbox_y_pct IS NULL OR bbox_w_pct IS NULL OR bbox_h_pct IS NULL
         """
     ).fetchone()[0]
-    assert bad == 0, f"{bad} rows violate 0.0 <= bbox_pct <= 1.0"
+    assert bad == 0, f"{bad} rows have invalid, empty, or out-of-page highlight boxes"
 
     emb_ok = con.execute(
         "SELECT COUNT(*) FROM corpus WHERE array_length(embedding) <> 384"
@@ -494,66 +659,81 @@ def main() -> None:
         verify_corpus()
         return
 
-    assert RAW_PDFS_DIR.is_dir(), f"missing input folder: {RAW_PDFS_DIR}"
-    PDFS_OUT_DIR.mkdir(parents=True, exist_ok=True)
-
-    pdf_files = sorted(RAW_PDFS_DIR.glob("*.pdf"))
+    if not RAW_PDFS_DIR.is_dir():
+        raise FileNotFoundError(f"missing input folder: {RAW_PDFS_DIR}")
+    pdf_files = sorted((p for p in RAW_PDFS_DIR.iterdir() if p.is_file() and p.suffix.lower() == ".pdf"), key=lambda p: p.name)
     if args.limit > 0:
-        pdf_files = pdf_files[: args.limit]
-    assert pdf_files, f"no PDFs found in {RAW_PDFS_DIR}"
-
-    # 3.2.1 — copy each raw PDF into dist_data/pdfs/{doc_id}.pdf (web-streamed copy)
-    file_args = []
-    for p in pdf_files:
-        doc_id = slugify(p.name)
-        dest = PDFS_OUT_DIR / f"{doc_id}.pdf"
-        if not dest.exists() or dest.stat().st_size != p.stat().st_size:
-            shutil.copy2(p, dest)
-        file_args.append((p.name, humanize_title(p.name), extract_date(p.name, p), doc_id))
-    print(f"[copy] {len(file_args)} PDFs staged in {PDFS_OUT_DIR}", flush=True)
-
-    # Stage A
+        pdf_files = pdf_files[:args.limit]
+    if not pdf_files:
+        raise ValueError(f"no PDFs found in {RAW_PDFS_DIR}")
+    check_slug_collisions(pdf_files)
+    file_args = [(p.name, humanize_title(p.name), extract_date(p.name, p), slugify(p.name)) for p in pdf_files]
+    verify_ocr_available()
+    source_hashes = {p.name: sha256_file(p) for p in pdf_files}
     extracted = stage_extract(file_args, workers=args.workers, force=args.force)
-    ok_docs = [e for e in extracted if not e.get("error")]
-    failed_docs = [e for e in extracted if e.get("error")]
-    all_rows: list[dict] = []
-    for e in ok_docs:
-        all_rows.extend(e["rows"])
-    # de-dupe on PK (defensive)
-    seen: set[str] = set()
-    deduped = []
-    for r in all_rows:
-        if r["passage_id"] not in seen:
-            seen.add(r["passage_id"])
-            deduped.append(r)
-    all_rows = deduped
-    print(f"[extract] corpus rows: {len(all_rows)} from {len(ok_docs)} docs "
-          f"({len(failed_docs)} failed: {[e['source_filename'] for e in failed_docs]})", flush=True)
-    assert all_rows, "no rows extracted — check docling output"
+    if any(sha256_file(p) != source_hashes[p.name] for p in pdf_files):
+        raise RuntimeError("A source PDF changed during extraction; retry the build")
+    all_rows = [row for doc in extracted for row in doc["rows"]]
+    if not all_rows:
+        raise ValueError("no rows extracted")
+    validate_rows(all_rows)
 
-    # Stages B + C
-    stage_embed_and_cluster(all_rows)
-
-    # Stage D
-    stage_export(all_rows)
-    (DIST_DATA_DIR / "dossier.json").write_text(json.dumps({
-        "schema_version": 1,
-        "title": args.title,
-        "description": args.description,
-        "document_count": len(ok_docs),
-        "passage_count": len(all_rows),
-        "model_id": CENTROIDS_MODEL_ID,
-        "dimensions": EMBED_DIM,
-        "config": "default",
-        "split": "train",
-        "corpus_path": "corpus.parquet",
-        "centroids_path": "centroids.json",
-        "pdfs_path": "pdfs",
-    }, indent=2))
-
-    # §6 verification
-    verify_corpus()
-    print("[done] dist_data/ is ready (corpus.parquet, centroids.json, pdfs/)", flush=True)
+    # Build and verify a complete release alongside the existing one before publishing it.
+    global DIST_DATA_DIR, PDFS_OUT_DIR, CENTROIDS_PATH, CORPUS_PARQUET_PATH
+    release_dir = DIST_DATA_DIR
+    staging = Path(tempfile.mkdtemp(prefix=".dist-data-staging-", dir=PROJECT_ROOT))
+    DIST_DATA_DIR = staging
+    PDFS_OUT_DIR = staging / "pdfs"
+    CENTROIDS_PATH = staging / "centroids.json"
+    CORPUS_PARQUET_PATH = staging / "corpus.parquet"
+    backup = PROJECT_ROOT / ".dist-data-previous"
+    try:
+        PDFS_OUT_DIR.mkdir()
+        sources = []
+        for p in pdf_files:
+            digest = source_hashes[p.name]
+            shutil.copy2(p, PDFS_OUT_DIR / f"{slugify(p.name)}.pdf")
+            if sha256_file(PDFS_OUT_DIR / f"{slugify(p.name)}.pdf") != digest:
+                raise IOError(f"PDF changed during staging: {p.name}")
+            sources.append({"filename": p.name, "doc_id": slugify(p.name), "sha256": digest})
+        model_revision = stage_embed_and_cluster(all_rows)
+        stage_export(all_rows)
+        manifest = {
+            "schema_version": 1, "title": args.title, "description": args.description,
+            "document_count": len(extracted), "passage_count": len(all_rows),
+            "model_id": CENTROIDS_MODEL_ID, "dimensions": EMBED_DIM, "config": "default", "split": "train",
+            "corpus_path": "corpus.parquet", "centroids_path": "centroids.json", "pdfs_path": "pdfs",
+            "clusters_path": "clusters",
+            "build": {"cache_version": CACHE_VERSION, "source_files": sources,
+                      "extraction_tools": versions("docling", "docling-core", "pypdfium2", "ocrmac"),
+                      "ocr_backend": "ocrmac/Apple Vision" if sys.platform == "darwin" else "docling default",
+                      "force_full_page_ocr": False,
+                      "embedding_tools": versions("sentence-transformers", "transformers", "torch"),
+                      "embedding_model": EMBED_MODEL_ID, "embedding_revision": model_revision, "cluster_tools": versions("scikit-learn", "duckdb"),
+                      "cluster_random_state": RANDOM_STATE, "cluster_divisor": CLUSTER_DIVISOR},
+        }
+        atomic_json(staging / "dossier.json", manifest)
+        verify_corpus()
+        if backup.exists():
+            raise RuntimeError(f"Previous release backup exists at {backup}; inspect and remove it before publishing")
+        if release_dir.exists():
+            os.replace(release_dir, backup)
+        try:
+            os.replace(staging, release_dir)
+        except BaseException:
+            if backup.exists():
+                os.replace(backup, release_dir)
+            raise
+        if backup.exists():
+            shutil.rmtree(backup)
+        print("[done] validated release published to dist_data/", flush=True)
+    finally:
+        if staging.exists():
+            shutil.rmtree(staging)
+        DIST_DATA_DIR = release_dir
+        PDFS_OUT_DIR = release_dir / "pdfs"
+        CENTROIDS_PATH = release_dir / "centroids.json"
+        CORPUS_PARQUET_PATH = release_dir / "corpus.parquet"
 
 
 if __name__ == "__main__":

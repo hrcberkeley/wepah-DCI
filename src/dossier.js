@@ -23,6 +23,11 @@ export function validateDossier(data) {
   for (const key of ['corpus_path', 'centroids_path', 'pdfs_path']) {
     if (data[key].startsWith('/') || data[key].split('/').some((part) => !part || part === '.' || part === '..')) throw new Error('The dossier contains an invalid file path.');
   }
+  if (data.clusters_path !== undefined &&
+      (typeof data.clusters_path !== 'string' || data.clusters_path.startsWith('/') ||
+       data.clusters_path.split('/').some((part) => !part || part === '.' || part === '..'))) {
+    throw new Error('The dossier contains an invalid cluster path.');
+  }
   if (data.model_id !== 'Xenova/bge-small-en-v1.5' || data.dimensions !== 384) throw new Error('This dossier uses an unsupported search index.');
   if (!Number.isSafeInteger(data.document_count) || data.document_count < 1 || !Number.isSafeInteger(data.passage_count) || data.passage_count < 1) throw new Error('The dossier has invalid document counts.');
   return data;

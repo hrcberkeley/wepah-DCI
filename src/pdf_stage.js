@@ -146,6 +146,9 @@ async function renderPage(pageNum, bbox) {
 /** Zoom-proof percentage overlay straight from the Parquet row (§5.5.3). */
 export function highlightBox(bbox) {
   el.layer.innerHTML = '';
+  if (!bbox || ![bbox.x, bbox.y, bbox.w, bbox.h].every(Number.isFinite)
+      || bbox.x < 0 || bbox.y < 0 || bbox.w <= 0 || bbox.h <= 0
+      || bbox.x + bbox.w > 1.001 || bbox.y + bbox.h > 1.001) return;
   const box = document.createElement('div');
   box.className = 'evidence-highlight-box';
   box.style.left = `${bbox.x * 100}%`;
@@ -161,7 +164,7 @@ export function highlightBox(bbox) {
   el.scroll.scrollTo({
     top: el.scroll.scrollTop + r.top - stage.top - stage.height / 2 + r.height / 2,
     left: el.scroll.scrollLeft + r.left - stage.left - stage.width / 2 + r.width / 2,
-    behavior: 'smooth',
+    behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth',
   });
 }
 
@@ -196,8 +199,8 @@ export async function open({ docId, docTitle, pageNumber, bbox }) {
   currentDocId = null;
   const loadedPdf = await pdfjsLib.getDocument({
     url: pdfUrl(docId),
-    disableAutoFetch: true,   // HTTP Range Requests: open p.45 of a 300-page file without the rest
-    disableStream: false,
+    disableAutoFetch: true,
+    disableStream: true,  // Required for disableAutoFetch to prevent prefetching.
   }).promise;
   if (epoch !== stageEpoch) { await loadedPdf.destroy(); return; }
   currentPdf = loadedPdf;

@@ -85,7 +85,7 @@ async function boot() {
     el.button.disabled = true;
     try {
       const repo = parseRepository($('dossier-url').value);
-      const manifest = repo === DEFAULT_REPO ? validateDossier(await (await fetch('./dossier.json')).json()) : await loadDossier(repo);
+      const manifest = await loadDossier(repo);
       await db.openDossier(repo, manifest);
       selectDossier(repo, manifest);
       showPanel(false);
@@ -95,8 +95,18 @@ async function boot() {
     } finally { submit.disabled = false; el.button.disabled = false; state.switching = false; }
   });
   $('dossier-default').addEventListener('click', () => { $('dossier-url').value = DEFAULT_REPO; $('dossier-form').requestSubmit(); });
-  try { state.dossier = validateDossier(await (await fetch('./dossier.json')).json()); updateDossierHeading(); }
-  catch (error) { console.warn('Default dossier details unavailable:', error); }
+  try {
+    state.dossier = CONFIG.HF_DATASET_REPO
+      ? await loadDossier(CONFIG.HF_DATASET_REPO)
+      : validateDossier(await (await fetch('./dist_data/dossier.json')).json());
+    updateDossierHeading();
+  }
+  catch (error) {
+    console.error('Default dossier details unavailable:', error);
+    setStatus('The dossier details could not be opened. Please reload and try again.', false);
+    el.button.disabled = true;
+    return;
+  }
 
   el.pills.forEach((pill) => {
     pill.addEventListener('click', () => setMode(pill.dataset.mode));
@@ -113,7 +123,7 @@ async function boot() {
   el.expand.addEventListener('click', () => { setCompact(false); el.input.focus(); });
 
   try {
-    await db.initEngine();
+    await db.initEngine(state.dossier);
   } catch (err) {
     console.error(err);
     setStatus('The record index could not be opened. Please make sure the data folder is being served and reload.', false);
@@ -228,9 +238,7 @@ function badgeFor(row, mode) {
   }
   if (mode === 'exact') return { cls: 'tag-exact', text: 'Exact word match' };
   if (mode === 'concepts') {
-    return (typeof row.score === 'number' && row.score >= CONFIG.STRONG_MATCH_THRESHOLD)
-      ? { cls: 'tag-strong', text: 'Strong conceptual match' }
-      : { cls: 'tag-related', text: 'Related context' };
+    return { cls: 'tag-related', text: 'Related context' };
   }
   return { cls: 'tag-related', text: 'Related context' };
 }
@@ -243,17 +251,32 @@ function escapeHtml(s) {
 
 function escapeRegExp(s) { return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
 
-/** Wrap query terms in <mark class="exact-hit"> for Find Exact Words mode. */
-function highlightTerms(htmlEscaped, query) {
-  const terms = query.split(/\s+/).filter((t) => t.length >= 2).map(escapeRegExp);
-  if (!terms.length) return htmlEscaped;
-  const re = new RegExp(`(${terms.join('|')})`, 'gi');
-  return htmlEscaped.replace(re, '<mark class="exact-hit">$1</mark>');
+/** Highlight the same literal phrase that the database matched. */
+function highlightExactPhrase(text, query) {
+  if (!query) return escapeHtml(text);
+  const re = new RegExp(escapeRegExp(query), 'gi');
+  let html = '';
+  let start = 0;
+  for (const hit of text.matchAll(re)) {
+    html += escapeHtml(text.slice(start, hit.index));
+    html += `<mark class="exact-hit">${escapeHtml(hit[0])}</mark>`;
+    start = hit.index + hit[0].length;
+  }
+  return html + escapeHtml(text.slice(start));
 }
 
 function excerpt(text, max = 700) {
   const t = String(text ?? '');
   return t.length > max ? `${t.slice(0, max)}…` : t;
+}
+
+function exactExcerpt(text, query, max = 700) {
+  const full = String(text ?? '');
+  if (full.length <= max) return full;
+  const hit = full.toLocaleLowerCase().indexOf(query.toLocaleLowerCase());
+  if (hit < 0) return excerpt(full, max);
+  const start = Math.max(0, Math.min(hit - Math.floor((max - query.length) / 2), full.length - max));
+  return `${start ? '…' : ''}${full.slice(start, start + max)}${start + max < full.length ? '…' : ''}`;
 }
 
 function renderStreamLoading() {
@@ -302,7 +325,7 @@ function renderEvidenceCards(rows, mode, query) {
     card.style.setProperty('--i', idx); // stagger for the rise + highlighter swipe
 
     const quoteHtml = mode === 'exact'
-      ? highlightTerms(escapeHtml(excerpt(row.passage_text)), query)
+      ? highlightExactPhrase(exactExcerpt(row.passage_text, query), query)
       : escapeHtml(excerpt(row.passage_text));
 
     card.innerHTML = `
@@ -425,7 +448,7 @@ async function renderDossier(query, rows) {
   }
 
   renderSummary(query, claims, rows, {
-    title: usedModel ? 'Written Answer' : 'Extracted Key Passages',
+    title: usedModel ? 'Selected Source Passages' : 'Extracted Key Passages',
     offerSetup: gpuOK && !usedModel,
     onEnableEngine: gpuOK && !usedModel
       ? () => renderDossier(query, rows)
@@ -434,23 +457,21 @@ async function renderDossier(query, rows) {
 
   setStatus(claims.length
     ? (usedModel
-      ? 'Written answer below — every line cites the page it came from.'
+      ? 'Source passages selected — every line cites the page it came from.'
       : 'Summary prepared below — every line cites the page it came from.')
     : 'No matching passages were found for that question.', false);
   el.summary.hidden = false;
 }
 
-/** Mandatory verification gate (§5.4.4): discard every claim that is not verbatim-grounded. */
+/** A displayed statement must itself occur in the cited quote. Quote presence
+ * alone cannot establish that a paraphrase follows from the source. */
 function gateClaims(rawClaims, rows) {
   const passageById = new Map(rows.map((r) => [r.passage_id, r]));
   const verified = verifier.verifyClaims(rawClaims, passageById)
     .filter((claim) => {
       const statement = verifier.normalizeWhitespace(claim.statement);
       const quote = verifier.normalizeWhitespace(claim.verbatim_quote);
-      if (!statement) return false;
-      // The quote check alone does not catch invented measurements or dates.
-      const figures = statement.match(/\d+(?:[.,]\d+)*/g) || [];
-      return figures.every((figure) => quote.includes(figure));
+      return statement.length >= 40 && verifier.isGrounded(statement, quote);
     });
   const distinct = [];
   for (const claim of verified) {
@@ -530,7 +551,7 @@ function renderSummary(query, claims, rows, { offerSetup = false, onEnableEngine
     pill.className = 'verify-pill';
     pill.textContent = `verify · ${passage.doc_title}, p. ${passage.page_number}`;
     pill.title = `${passage.doc_title} — page ${passage.page_number}`;
-    pill.dataset.quote = (claim.verbatim_quote || claim.statement).slice(0, 240);
+    pill.dataset.quote = claim.verbatim_quote || claim.statement;
     pill.addEventListener('click', () => openGrounding(passage));
     li.appendChild(pill);
 

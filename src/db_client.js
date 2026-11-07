@@ -1,11 +1,6 @@
-// db_client.js — Zero-download hybrid query engine (AGENTS.md §4)
-//
-// Three data-access methods, none of which ever downloads the full corpus:
-//   1. Keyword search   — Datasets-Server BM25 (when HF repo configured) or a selective
-//                         DuckDB-Wasm ILIKE query projecting metadata only (no vector bytes).
-//   2. Concept search   — In-browser query vector -> centroid routing -> DuckDB-Wasm
-//                         fetches ONLY the two matching Parquet row groups (HTTP 206 ranges).
-//   3. Hybrid retrieval — union of 1 + 2 for "Ask the Dossier".
+// db_client.js — browser retrieval engine.
+// Remote Parquet files are registered through DuckDB-Wasm's JavaScript HTTP file
+// system. The older direct-URL read path can fetch an entire remote file.
 
 export const CONFIG = {
   // Streams everything from the Hugging Face dataset repo (PDFs, Parquet, centroids);
@@ -13,8 +8,6 @@ export const CONFIG = {
   HF_DATASET_REPO: 'kolenyo/MS_Datacenter',
   // Local base URL of dist_data when no HF repo is configured.
   LOCAL_DATA_BASE: '/dist_data',
-  // Score at or above which a concept match shows as a strong match.
-  STRONG_MATCH_THRESHOLD: 0.72,
   MAX_KEYWORD_RESULTS: 25,
   MAX_CONCEPT_RESULTS: 15,
   DOSSIER_PASSAGES: 6,
@@ -24,6 +17,18 @@ export const CONFIG = {
   RERANKER_KEYWORD_SHARE: 12,   // of the candidate pool; the rest comes from concept search
 };
 let activeDossier = null;
+let _parquetSeq = 0;
+const _registeredFiles = new Map();
+
+async function registerParquet(url) {
+  if (_registeredFiles.has(url)) return _registeredFiles.get(url);
+  const alias = `dossier_corpus_${++_parquetSeq}.parquet`;
+  const registration = _db.registerFileURL(alias, url, _duckdb.DuckDBDataProtocol.HTTP, false)
+    .then(() => alias);
+  _registeredFiles.set(url, registration);
+  try { return await registration; }
+  catch (error) { _registeredFiles.delete(url); throw error; }
+}
 
 export function currentRepository() { return CONFIG.HF_DATASET_REPO; }
 export async function openDossier(repo, manifest) {
@@ -32,7 +37,6 @@ export async function openDossier(repo, manifest) {
   if (!response.ok) throw new Error(`Could not open the search index (${response.status}).`);
   const centroids = await response.json();
   if (centroids.model_id !== manifest.model_id || centroids.dimensions !== manifest.dimensions || !Array.isArray(centroids.clusters) || !centroids.clusters.length || centroids.clusters.some((c) => !Number.isInteger(c.cluster_id) || !Array.isArray(c.centroid) || c.centroid.length !== 384)) throw new Error('The search index does not match this dossier.');
-  // A failed validation leaves the previous dossier intact.
   CONFIG.HF_DATASET_REPO = repo;
   activeDossier = manifest;
   _centroids = centroids;
@@ -57,7 +61,13 @@ export function dataUrl(path) {
 export function pdfUrl(docId) {
   return dataUrl(`${activeDossier?.pdfs_path || 'pdfs'}/${docId}.pdf`);
 }
-function corpusUrl() { return dataUrl(activeDossier?.corpus_path || 'corpus.parquet'); }
+function corpusFile() { return registerParquet(dataUrl(activeDossier?.corpus_path || 'corpus.parquet')); }
+
+async function conceptFiles(clusterIds) {
+  const folder = activeDossier?.clusters_path;
+  if (!folder) return [await corpusFile()];
+  return Promise.all(clusterIds.map((id) => registerParquet(dataUrl(`${folder}/cluster_${String(id).padStart(2, '0')}.parquet`))));
+}
 
 const METADATA_COLUMNS =
   'passage_id, doc_id, doc_title, doc_date, page_number, content_type, passage_text, ' +
@@ -80,11 +90,12 @@ function setStatus(msg, busy = false) {
 }
 
 // ---------- initialization (§4.1) ----------
-export async function initEngine() {
+export async function initEngine(manifest = null) {
+  activeDossier = manifest;
   setStatus('Preparing the record index…', true);
 
   // 1. Centroid routing file (~90 KB)
-  const cResp = await fetch(dataUrl('centroids.json'));
+  const cResp = await fetch(dataUrl(activeDossier?.centroids_path || 'centroids.json'));
   if (!cResp.ok) throw new Error(`centroids.json not found (${cResp.status})`);
   _centroids = await cResp.json();
 
@@ -100,6 +111,12 @@ export async function initEngine() {
   _db = new _duckdb.AsyncDuckDB(logger, dbWorker);
   await _db.instantiate(bundle.mainModule, bundle.pthreadWorker);
   _conn = await _db.connect();
+  if (!CONFIG.HF_DATASET_REPO) {
+    try {
+      const manifest = await fetch(dataUrl('dossier.json'));
+      if (manifest.ok) activeDossier = await manifest.json();
+    } catch { /* Older local datasets have no manifest. */ }
+  }
   await ensureSimilarityFunction();
 
   // 3. In-browser semantic encoder inside a Web Worker (UI thread never freezes)
@@ -190,44 +207,58 @@ export function embedRaw(text) {
   return embedQueryWorker(text, '');
 }
 
-// ---------- Mode 1: Find Exact Words (§4.2) ----------
+// ---------- Mode 1: literal case-insensitive substring search ----------
 export async function keywordSearch(query, limit = CONFIG.MAX_KEYWORD_RESULTS) {
+  const requested = query.trim();
+  const safeLimit = Math.max(1, Math.min(100, Math.trunc(limit)));
   if (CONFIG.HF_DATASET_REPO) {
     try {
-      const api = 'https://datasets-server.huggingface.co/search';
-      const u = `${api}?dataset=${encodeURIComponent(CONFIG.HF_DATASET_REPO)}`
-        + `&config=${encodeURIComponent(activeDossier?.config || 'default')}&split=${encodeURIComponent(activeDossier?.split || 'train')}&query=${encodeURIComponent(query)}&limit=${limit}`;
-      const resp = await fetch(u);
-      if (!resp.ok) throw new Error(`datasets-server ${resp.status}`);
-      const data = await resp.json();
-      return (data.rows || []).map((r) => {
-        const row = r.row;
-        return {
-          passage_id: row.passage_id, doc_id: row.doc_id, doc_title: row.doc_title,
-          doc_date: row.doc_date, page_number: row.page_number,
-          content_type: row.content_type, passage_text: row.passage_text,
-          bbox_x_pct: row.bbox_x_pct, bbox_y_pct: row.bbox_y_pct,
-          bbox_w_pct: row.bbox_w_pct, bbox_h_pct: row.bbox_h_pct,
-          score: null, match: 'exact',
-        };
-      });
-    } catch (err) {
-      // fall through to the local Parquet mode
-      console.warn('Datasets Server unavailable, using local Parquet mode:', err);
+      // The server searches all string fields with stemming. Treat it only as
+      // candidate generation and verify every result against passage_text.
+      const matches = new Map();
+      for (let offset = 0; offset < 1000 && matches.size < safeLimit; offset += 100) {
+        const u = new URL('https://datasets-server.huggingface.co/search');
+        for (const [key, value] of Object.entries({
+          dataset: CONFIG.HF_DATASET_REPO, config: activeDossier?.config || 'default',
+          split: activeDossier?.split || 'train', query: requested, offset, length: 100,
+        })) u.searchParams.set(key, String(value));
+        const response = await fetch(u);
+        if (!response.ok) throw new Error(`Search service unavailable (${response.status}).`);
+        const data = await response.json();
+        for (const entry of data.rows || []) {
+          const row = entry.row;
+          if (String(row?.passage_text || '').toLocaleLowerCase().includes(requested.toLocaleLowerCase())) {
+            matches.set(row.passage_id, {
+              passage_id: row.passage_id, doc_id: row.doc_id, doc_title: row.doc_title,
+              doc_date: row.doc_date, page_number: row.page_number,
+              content_type: row.content_type, passage_text: row.passage_text,
+              bbox_x_pct: row.bbox_x_pct, bbox_y_pct: row.bbox_y_pct,
+              bbox_w_pct: row.bbox_w_pct, bbox_h_pct: row.bbox_h_pct,
+              score: null, match: 'exact',
+            });
+          }
+        }
+        if (!data.rows?.length || offset + 100 >= (data.num_rows_total ?? 0)) break;
+      }
+      return [...matches.values()]
+        .sort((a, b) => a.doc_id.localeCompare(b.doc_id) || a.page_number - b.page_number || a.passage_id.localeCompare(b.passage_id))
+        .slice(0, safeLimit);
+    } catch (error) {
+      console.warn('The public search service is unavailable; searching the dossier file.', error);
     }
   }
 
-  // Keyword inlined as an escaped SQL literal — avoids prepared-statement binding
-  // quirks across duckdb-wasm builds. Single quotes are doubled; NULs stripped.
-  const lit = sqlString(query);
+  const lit = sqlString(query.trim());
+  const file = await corpusFile();
   const sql = `
     SELECT ${METADATA_COLUMNS}
-    FROM read_parquet('${corpusUrl()}')
-    WHERE passage_text ILIKE '%' || ${lit} || '%'
-    LIMIT ${limit};
+    FROM read_parquet('${file}')
+    WHERE strpos(lower(passage_text), lower(${lit})) > 0
+    ORDER BY doc_id ASC, page_number ASC, passage_id ASC
+    LIMIT ${safeLimit};
   `;
   const result = await runQuery(sql);
-  return rowsToObjects(result);
+  return rowsToObjects(result).map((row) => ({ ...row, score: null, match: 'exact' }));
 }
 
 // ---------- Mode 2: Explore Concepts (§4.3, centroid-routed) ----------
@@ -248,18 +279,22 @@ export async function conceptSearch(query, limit = CONFIG.MAX_CONCEPT_RESULTS) {
   const c1 = scored[0].cluster_id;
   const c2 = scored.length > 1 ? scored[1].cluster_id : c1;
 
-  // 3. Predicate pushdown fetches only the byte ranges of clusters c1 and c2.
+  // 3. Predicate pushdown skips row groups outside clusters c1 and c2.
   //    Parquet reads fixed arrays back as lists, so cast embedding to FLOAT[384].
   //    The query vector and cluster ids are inlined as literals (no binding quirks).
   const vecLiteral = `CAST([${Array.from(qv).join(',')} ] AS FLOAT[384])`;
   const c1Safe = Number.parseInt(c1, 10);
   const c2Safe = Number.parseInt(c2, 10);
+  let files = await conceptFiles([...new Set([c1Safe, c2Safe])]);
+  const parquetSource = () => files.length === 1
+    ? `'${files[0]}'`
+    : `[${files.map((file) => `'${file}'`).join(', ')}]`;
   const sql = `
     SELECT ${METADATA_COLUMNS},
            array_cosine_similarity(CAST(embedding AS FLOAT[384]), ${vecLiteral}) AS score
-    FROM read_parquet('${corpusUrl()}')
+    FROM read_parquet(${parquetSource()})
     WHERE cluster_id IN (${c1Safe}, ${c2Safe})
-    ORDER BY score DESC
+    ORDER BY score DESC, passage_id ASC
     LIMIT ${limit};
   `;
   const result = await runQuery(sql);
@@ -291,6 +326,27 @@ async function tokenSearch(query, limit) {
     .filter((w) => w.length >= 4 && !STOP_WORDS.has(w.toLowerCase()))
     .slice(0, 8);
   if (!tokens.length) return [];
+  if (CONFIG.HF_DATASET_REPO) {
+    const u = new URL('https://datasets-server.huggingface.co/search');
+    for (const [key, value] of Object.entries({
+      dataset: CONFIG.HF_DATASET_REPO, config: activeDossier?.config || 'default',
+      split: activeDossier?.split || 'train', query: tokens.join(' '), length: 100,
+    })) u.searchParams.set(key, String(value));
+    const response = await fetch(u);
+    if (!response.ok) throw new Error(`Search service unavailable (${response.status}).`);
+    const data = await response.json();
+    const candidates = (data.rows || []).map((entry) => entry.row)
+      .filter((row) => row?.passage_id && row?.passage_text);
+    const score = (text) => {
+      const upper = text.toUpperCase();
+      return tokens.reduce((total, token) => total + upper.split(token.toUpperCase()).length - 1, 0)
+        * 1000 / Math.max(200, text.length);
+    };
+    return candidates
+      .map((row) => ({ ...row, _tf: score(row.passage_text) }))
+      .sort((a, b) => b._tf - a._tf || a.passage_id.localeCompare(b.passage_id))
+      .slice(0, limit);
+  }
   const esc = (t) => t.replace(/\0/g, '').replace(/'/g, "''");
   const where = tokens.map((t) => `passage_text ILIKE '%${esc(t)}%'`).join(' OR ');
   // Term-frequency scoring, normalized by passage length: a dedicated noise
@@ -300,9 +356,10 @@ async function tokenSearch(query, limit) {
   const tf = tokens
     .map((t) => `((LENGTH(passage_text) - LENGTH(REPLACE(UPPER(passage_text), '${esc(t.toUpperCase())}', ''))) / ${t.length})`)
     .join(' + ');
+  const file = await corpusFile();
   const sql = `
     SELECT ${METADATA_COLUMNS}, (${tf}) * 1000.0 / GREATEST(200, LENGTH(passage_text)) AS _tf
-    FROM read_parquet('${corpusUrl()}')
+    FROM read_parquet('${file}')
     WHERE ${where}
     ORDER BY _tf DESC, doc_id ASC, page_number ASC
     LIMIT ${limit};
