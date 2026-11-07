@@ -465,9 +465,9 @@ async function readMore(r, count) {
   r.busy = false;
   if (run !== r) return;
   renderRun(r);
-  setStatus(r.claims.length || r.read
+  setStatus(r.claims.some((c) => c.written)
     ? 'Answer written — every line is checked against the page it cites.'
-    : 'No matching passages were found for that question.', false);
+    : 'Key passages extracted below — every line cites the page it came from.', false);
 }
 
 /** Claims for one batch: the answering helper when it is on, otherwise exact sentences. */
