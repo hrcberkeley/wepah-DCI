@@ -6,23 +6,23 @@ The current Microsoft Datacenter Dossier contains 283 PDFs and 91,130 passages. 
 
 ## Build or update a dossier
 
-Follow the step-by-step [ingestion guide](ingestion/INGESTION.md). It covers adding PDFs, running the builder, checking a release, previewing it, publishing it, and reusing previous processing.
+Put the PDFs in `raw_pdfs/` and run:
 
 ```sh
-uv sync --project ingestion
-uv run --project ingestion python ingestion/build_corpus.py --title "My dossier"
-uv run --project ingestion python ingestion/build_corpus.py --verify-only
+./wehpah
 ```
 
-The builder keeps the existing release until a replacement passes validation. It caches successful extraction by PDF content and settings, and passage representations by text and model revision. The output is `dist_data/` with `dossier.json`, `corpus.parquet`, per-cluster files in `clusters/`, `centroids.json`, and `pdfs/`.
+This opens the **WeHPAH! Studio**, a local page that sets the dossier's title, shows which PDFs are new, builds and checks the release, previews it, and publishes it to Hugging Face. The same steps are available as `./wehpah build`, `preview`, `login`, `publish` and `check`. Settings live in [dossier.toml](dossier.toml); only `title` is required. See the [ingestion guide](ingestion/INGESTION.md).
+
+The builder keeps the existing release until a replacement passes its checks, and reuses earlier work for unchanged PDFs and passages. The output is `dist_data/` with `dossier.json`, `corpus.parquet`, per-cluster files in `clusters/`, `centroids.json`, and `pdfs/`.
 
 ## Run the site locally
 
 ```sh
-uv run --project ingestion python ingestion/devserver.py 8410
+./wehpah preview
 ```
 
-Open `http://127.0.0.1:8410/`. The site currently points to the public `kolenyo/MS_Datacenter` dataset in [src/db_client.js](src/db_client.js). Clear `HF_DATASET_REPO` there to search the local `dist_data/`. The local server supports HTTP byte ranges.
+This opens `http://127.0.0.1:8410/?local`, which searches the local `dist_data/` through a server that supports HTTP byte ranges. Without `?local`, the site opens the public `kolenyo/MS_Datacenter` dataset; `?repo=owner/name` opens another published dossier.
 
 ## How searches work
 

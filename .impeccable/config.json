@@ -1,0 +1,17 @@
+{
+  "detector": {
+    "ignoreRules": [],
+    "ignoreFiles": [],
+    "ignoreValues": [
+      {
+        "rule": "cream-palette",
+        "value": "*",
+        "files": [
+          "ingestion/studio.html"
+        ],
+        "createdAt": "2026-11-07T21:18:32.529Z",
+        "reason": "Project spec AGENTS.md §5.1 mandates the #F7F1E6 cream paper canvas; Studio matches the main site"
+      }
+    ]
+  }
+}

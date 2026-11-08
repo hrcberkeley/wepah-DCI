@@ -1,0 +1,4 @@
+#!/bin/sh
+# WeHPAH! dossier builder. Run ./wehpah --help, or just ./wehpah to open the Studio.
+here="$(cd "$(dirname "$0")" && pwd)"
+exec uv run --quiet --project "$here/ingestion" python "$here/ingestion/wehpah.py" "$@"

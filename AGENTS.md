@@ -14,9 +14,14 @@ Create and maintain this exact project layout:
 ```text
 project-root/
 ├── raw_pdfs/                  # Input folder containing raw PDF files (scanned & digital)
+├── dossier.toml               # Dossier settings (title, folders, publish target); only title required
+├── wehpah                     # Launcher: ./wehpah opens the Studio
 ├── ingestion/
 │   ├── pyproject.toml         # Managed via uv
-│   └── build_corpus.py        # End-to-end OCR, VLM captioning, clustering & DuckDB Parquet export
+│   ├── build_corpus.py        # End-to-end OCR, VLM captioning, clustering & DuckDB Parquet export
+│   ├── wehpah.py              # `./wehpah` command: build / check / preview / login / publish / studio
+│   ├── devserver.py           # Range-capable local server + Studio API
+│   └── studio.html            # WeHPAH! Studio (local build & publish page)
 ├── dist_data/                 # Output folder to upload to Hugging Face Dataset repo
 │   ├── corpus.parquet         # Sorted by cluster_id with fixed ROW_GROUP_SIZE
 │   ├── centroids.json         # K-means cluster centers for zero-download browser routing

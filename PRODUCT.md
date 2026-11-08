@@ -33,7 +33,7 @@ Transformers.js over remote Parquet/PDF range requests); there is no backend.
 - Static vanilla-JS app (`web_app/`), no build step; CDN modules (DuckDB-Wasm,
   Transformers.js, PDF.js, WebLLM) and a Hugging Face dataset repo
   (`kolenyo/MS_Datacenter`) holding `corpus.parquet`, `centroids.json`, and `pdfs/`.
-- Local development via `ingestion/devserver.py` (range-capable static server).
+- Local building, preview and publishing via `./wehpah` (the Studio) on a range-capable local server.
 - Data contract (Parquet schema, centroid routing, bbox top-left percentages) is
   defined in `AGENTS.md` §2–§4 and must not drift between Python and JS.
 

@@ -5,8 +5,14 @@
 export const CONFIG = {
   // Streams everything from the Hugging Face dataset repo (PDFs, Parquet, centroids);
   // keyword search uses the Datasets-Server BM25 endpoint. Set '' to stream locally.
-  // Add ?local to the page URL to preview a freshly built dist_data/ before uploading it.
-  HF_DATASET_REPO: new URLSearchParams(location.search).has('local') ? '' : 'kolenyo/MS_Datacenter',
+  // Add ?local to the page URL to preview a freshly built dist_data/ before uploading it,
+  // or ?repo=owner/name to open another published dossier (what `wehpah publish` prints).
+  HF_DATASET_REPO: (() => {
+    const params = new URLSearchParams(location.search);
+    if (params.has('local')) return '';
+    const repo = params.get('repo') || '';
+    return /^[A-Za-z0-9][\w.-]*\/[A-Za-z0-9][\w.-]*$/.test(repo) ? repo : 'kolenyo/MS_Datacenter';
+  })(),
   // Local base URL of dist_data when no HF repo is configured.
   LOCAL_DATA_BASE: '/dist_data',
   MAX_KEYWORD_RESULTS: 25,

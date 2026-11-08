@@ -1,0 +1,6 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    { "name": "studio", "runtimeExecutable": "uv", "runtimeArgs": ["run", "--project", "ingestion", "python", "ingestion/wehpah.py", "studio", "--port", "8765", "--no-browser"], "port": 8765 }
+  ]
+}

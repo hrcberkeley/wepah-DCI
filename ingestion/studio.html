@@ -1,0 +1,386 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>WeHPAH! Studio</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="stylesheet"
+        href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=Bricolage+Grotesque:opsz,wght@12..96,800&family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,600;1,8..60,400&family=Spline+Sans+Mono:wght@400;500&display=swap" />
+  <style>
+    :root {
+      --paper: #F7F1E6; --paper-deep: #EEE6D4; --plate: #FFFFFF;
+      --ink: #211B12; --ink-2: #5F574A; --ink-3: #6E6455;
+      --line: rgba(33, 27, 18, 0.16); --line-strong: rgba(33, 27, 18, 0.42);
+      --gold: #FDB515; --gold-deep: #D99A00; --gold-ink: #7A5200;
+      --gold-mark: rgba(253, 181, 21, 0.42); --gold-fill: rgba(253, 181, 21, 0.32);
+      --font-display: 'Bricolage Grotesque', Georgia, serif;
+      --font-ui: 'Archivo', system-ui, -apple-system, 'Segoe UI', sans-serif;
+      --font-serif: 'Source Serif 4', Georgia, serif;
+      --font-mono: 'Spline Sans Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+      --shadow-plate: 0 0 0 1px rgba(33, 27, 18, 0.22), 0 22px 44px -26px rgba(33, 27, 18, 0.42);
+    }
+    * { box-sizing: border-box; }
+    [hidden] { display: none !important; }
+    html, body { margin: 0; background: var(--paper); color: var(--ink); font: 15px/1.5 var(--font-ui); -webkit-font-smoothing: antialiased; overflow-x: clip; }
+    ::selection { background: rgba(253, 181, 21, 0.5); }
+    :focus-visible { outline: 2px solid var(--gold-deep); outline-offset: 2px; border-radius: 2px; }
+    * { scrollbar-width: thin; scrollbar-color: rgba(33, 27, 18, 0.32) transparent; }
+    a { color: inherit; }
+
+    main { max-width: 860px; margin: 0 auto; padding: 56px 16px 96px; }
+    .kicker, .mono { font-family: var(--font-mono); font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-3); }
+    h1 { font: 800 clamp(44px, 8vw, 72px)/1 var(--font-display); letter-spacing: -0.03em; margin: 6px 0 10px; }
+    h1 .bang { background: linear-gradient(transparent 58%, var(--gold-mark) 58%, var(--gold-mark) 92%, transparent 92%); padding: 0 2px; }
+    h1 small { font-size: 0.42em; letter-spacing: -0.01em; color: var(--ink-2); margin-left: 6px; }
+    .tagline { font: italic 19px/1.45 var(--font-serif); color: var(--ink-2); margin: 0 0 40px; max-width: 34em; }
+
+    section { border-top: 2.5px solid var(--ink); padding: 18px 0 40px; }
+    section > header { display: flex; align-items: baseline; gap: 14px; margin-bottom: 16px; }
+    section > header .num { font: 500 13px var(--font-mono); color: var(--gold-ink); }
+    h2 { font: 700 21px/1.2 var(--font-ui); margin: 0; letter-spacing: -0.01em; }
+    .help { font: italic 16px/1.55 var(--font-serif); color: var(--ink-2); margin: 0 0 18px; max-width: 40em; }
+
+    form.settings { display: grid; gap: 16px; }
+    label { display: grid; gap: 4px; }
+    label > span { font: 500 12px var(--font-mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-3); }
+    input[type=text] { font: 17px/1.4 var(--font-serif); color: var(--ink); background: transparent; border: 0; border-bottom: 1px solid var(--line-strong); padding: 6px 0; width: 100%; caret-color: var(--gold-deep); }
+    input[type=text]:focus { outline: none; border-bottom: 2px solid var(--gold); padding-bottom: 5px; }
+    .folder { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 14px; align-items: end; }
+    .folder input { font: 14px/1.6 var(--font-mono); }
+    @media (max-width: 560px) { .folder { grid-template-columns: 1fr; } .folder button { justify-self: start; } }
+    .paths { font: 13px/1.6 var(--font-mono); color: var(--ink-3); word-break: break-all; }
+    .row { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 18px; }
+
+    button, .button { font: 600 15px var(--font-ui); border-radius: 3px; padding: 10px 18px; cursor: pointer; border: 1px solid var(--ink); background: var(--ink); color: var(--paper); text-decoration: none; display: inline-block; }
+    button.ghost, .button.ghost { background: transparent; color: var(--ink); }
+    button:hover:not(:disabled), .button:hover { box-shadow: 0 0 0 3px var(--gold-mark); }
+    button:disabled, .button[aria-disabled=true] { opacity: 0.4; cursor: not-allowed; pointer-events: none; }
+    .check { display: flex; gap: 10px; align-items: flex-start; font: 15px/1.45 var(--font-ui); color: var(--ink-2); }
+    .check > span { font: inherit; letter-spacing: normal; text-transform: none; color: inherit; }
+    .check input { accent-color: var(--ink); margin-top: 3px; width: 16px; height: 16px; }
+    .saved { font: 12px var(--font-mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--gold-ink); }
+    .error { font: 15px/1.5 var(--font-ui); color: var(--ink); background: var(--plate); box-shadow: var(--shadow-plate); border-left: 3px solid var(--gold-deep); padding: 12px 14px; border-radius: 2px; }
+
+    .count { font: 13px var(--font-mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-2); padding-bottom: 8px; border-bottom: 1px solid var(--line-strong); }
+    ol.docs { list-style: none; margin: 0; padding: 0; max-height: 420px; overflow-y: auto; }
+    ol.docs li { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 16px; padding: 10px 2px; border-bottom: 1px solid var(--line); }
+    .doc-title { font: 600 15px/1.35 var(--font-ui); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .doc-meta { grid-column: 1; font: 12px var(--font-mono); color: var(--ink-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .doc-reason { grid-column: 1 / -1; font: italic 15px/1.45 var(--font-serif); color: var(--ink-2); }
+    .remove { grid-row: 2; grid-column: 2; justify-self: end; font: 12px var(--font-mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-3); background: none; border: 0; padding: 0; text-decoration: underline 1px var(--line-strong); text-underline-offset: 3px; }
+    .remove:hover:not(:disabled) { color: var(--ink); box-shadow: none; text-decoration-color: var(--gold-deep); }
+    #docs-section.dropping { outline: 2px dashed var(--gold-deep); outline-offset: 6px; background: var(--gold-fill); }
+    .tag { grid-row: 1; grid-column: 2; align-self: start; font: 500 12px var(--font-mono); letter-spacing: 0.1em; text-transform: uppercase; color: var(--ink-3); padding: 2px 0; }
+    .tag.new { color: var(--gold-ink); }
+    .tag.new::before { content: ''; display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--gold); margin-right: 6px; vertical-align: 1px; }
+    .tag.failed { color: var(--ink); text-decoration: underline 2px var(--gold-deep); text-underline-offset: 3px; }
+    .tag.working { color: var(--gold-ink); }
+
+    ol.stages { list-style: none; display: flex; flex-wrap: wrap; gap: 6px 22px; padding: 0; margin: 18px 0 10px; counter-reset: s; }
+    ol.stages li { counter-increment: s; font: 13px var(--font-mono); letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink-3); }
+    ol.stages li::before { content: counter(s) ". "; }
+    ol.stages li.done { color: var(--ink-2); }
+    ol.stages li.done::after { content: " ✓"; color: var(--gold-ink); }
+    ol.stages li.active { color: var(--ink); background: linear-gradient(transparent 60%, var(--gold-mark) 60%); }
+    .bar { height: 6px; background: var(--paper-deep); border-radius: 99px; overflow: hidden; margin: 8px 0; }
+    .bar > div { height: 100%; width: 0; background: var(--gold); transition: width 0.4s ease; }
+    .status { font: 16px/1.55 var(--font-serif); margin: 10px 0 0; }
+    .report { margin: 14px 0 0; padding: 16px 18px; background: var(--plate); box-shadow: var(--shadow-plate); border-radius: 2px; font: 15px/1.6 var(--font-serif); }
+    .report p { margin: 0 0 6px; }
+    details { margin-top: 14px; }
+    summary { font: 12px var(--font-mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-3); cursor: pointer; }
+    pre.log { font: 12px/1.5 var(--font-mono); background: var(--paper-deep); padding: 12px; border-radius: 2px; max-height: 320px; overflow: auto; white-space: pre-wrap; word-break: break-word; color: var(--ink-2); }
+
+    .plate { background: var(--plate); box-shadow: var(--shadow-plate); border-radius: 2px; padding: 18px 20px; margin-bottom: 18px; }
+    .plate p { margin: 0 0 8px; font: 16px/1.55 var(--font-serif); }
+    .plate .big { font: 600 17px/1.4 var(--font-ui); }
+    code { font: 13px var(--font-mono); background: var(--paper-deep); padding: 1px 5px; border-radius: 2px; }
+
+    @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+  </style>
+</head>
+<body>
+<main>
+  <p class="kicker">The Investigations Lab&rsquo;s</p>
+  <h1>WeHPAH<span class="bang">!</span> <small>Studio</small></h1>
+  <p class="tagline">Turn a folder of PDFs into a searchable dossier, check it here, then share it.</p>
+
+  <div id="fatal" class="error" hidden></div>
+
+  <section>
+    <header><span class="num">01</span><h2>The dossier</h2></header>
+    <form class="settings" id="settings">
+      <label><span>Title</span><input type="text" name="title" required placeholder="e.g. Microsoft Datacenter Dossier" /></label>
+      <label><span>Short description (optional)</span><input type="text" name="description" placeholder="What is in this collection?" /></label>
+      <div class="folder">
+        <label><span>Folder with the PDFs</span><input type="text" name="pdfs" required spellcheck="false" placeholder="/path/to/your/PDFs" /></label>
+        <button type="button" class="ghost" id="choose-folder">Choose folder…</button>
+      </div>
+      <label><span>Publish to Hugging Face dataset (optional)</span><input type="text" name="publish_to" placeholder="owner/name" pattern="[A-Za-z0-9][\w.\-]*/[A-Za-z0-9][\w.\-]*" /></label>
+      <div class="row"><button type="submit" class="ghost">Save</button><span id="saved" class="saved" hidden>Saved</span><span id="settings-error" class="error" hidden></span></div>
+      <p class="paths" id="paths"></p>
+    </form>
+  </section>
+
+  <section id="docs-section">
+    <header><span class="num">02</span><h2>Documents</h2></header>
+    <p class="help">Add PDFs with the button or drop them here. Removed files go to a &ldquo;Removed PDFs&rdquo; folder; nothing is deleted. Then build again: only new or changed files are read.</p>
+    <div class="row" style="margin-bottom:16px">
+      <button type="button" id="add">Add PDFs…</button>
+      <input type="file" id="files" accept="application/pdf,.pdf" multiple hidden />
+      <button type="button" class="ghost" id="open-folder">Show folder</button>
+      <span class="status" id="docs-status" role="status" style="margin:0"></span>
+    </div>
+    <p class="count" id="doc-count">Looking for PDFs…</p>
+    <ol class="docs" id="docs"></ol>
+  </section>
+
+  <section>
+    <header><span class="num">03</span><h2>Build</h2></header>
+    <p class="help">The current release stays in place until the new one has been built and checked, so a failed build never breaks anything.</p>
+    <div class="row">
+      <button id="build">Build dossier</button>
+      <label class="check"><input type="checkbox" id="force" /> Read every PDF again from scratch</label>
+    </div>
+    <ol class="stages" id="stages">
+      <li>Reading PDFs</li><li>Indexing passages</li><li>Grouping subjects</li><li>Writing release</li><li>Checking</li>
+    </ol>
+    <div class="bar" id="bar" hidden><div></div></div>
+    <p class="status" id="build-status"></p>
+    <div class="report" id="report" hidden></div>
+    <details><summary>Show technical log</summary><pre class="log" id="log"></pre></details>
+  </section>
+
+  <section>
+    <header><span class="num">04</span><h2>Preview &amp; publish</h2></header>
+    <div class="plate" id="release"></div>
+    <div class="row">
+      <a class="button ghost" id="preview" href="/?local" target="_blank" rel="noopener">Open preview</a>
+    </div>
+    <div id="publish-box" style="margin-top:22px">
+      <p class="help" id="publish-help"></p>
+      <label class="check"><input type="checkbox" id="confirm" /> <span id="confirm-text">I confirm these PDFs and their text may be made public.</span></label>
+      <div class="row" style="margin-top:14px"><button id="publish">Publish</button></div>
+      <p class="status" id="publish-status"></p>
+    </div>
+  </section>
+</main>
+
+<script type="module">
+const $ = (id) => document.getElementById(id);
+const STAGES = { start: 0, extract: 0, merge: 0, index: 1, subjects: 2, export: 3, verify: 4 };
+let state = null, cursor = 0, polling = false, jobKind = null, progress = {}, blocked = true;
+
+const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+async function api(path, body) {
+  const res = await fetch(path, body === undefined ? {} : { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
+  return data;
+}
+
+async function refresh() {
+  state = await api('/api/state');
+  $('fatal').hidden = !state.error;
+  $('fatal').textContent = state.error || '';
+  if (state.error) return;
+  const s = state.settings, form = $('settings');
+  for (const key of ['title', 'description', 'publish_to', 'pdfs']) if (document.activeElement !== form[key]) form[key].value = s[key] || '';
+  $('paths').textContent = `The finished dossier is written to ${s.output}`;
+  renderDocs();
+  renderRelease();
+}
+
+function renderDocs() {
+  const docs = state.documents || [];
+  const read = docs.filter((d) => d.status === 'read').length;
+  const failed = Object.values(progress).filter((p) => p.status === 'failed').length;
+  const ids = new Set(docs.map((d) => d.doc_id));
+  const gone = (state.release?.doc_ids || []).filter((id) => !ids.has(id)).length;
+  $('doc-count').textContent = state.documents_error ? state.documents_error :
+    [`${docs.length} PDFs`, `${read} already read`, `${docs.length - read} new`, failed && `${failed} could not be read`,
+     gone && `${gone} removed since the last build`].filter(Boolean).join(' · ');
+  $('docs').innerHTML = docs.map((d) => {
+    const p = progress[d.file] || {};
+    const status = p.status || d.status;
+    const label = { read: 'Read', new: 'New', failed: 'Could not read', working: 'Reading…' }[status];
+    return `<li><span class="doc-title" title="${esc(d.title)}">${esc(d.title)}</span>
+      <span class="tag ${status}">${label}</span>
+      <span class="doc-meta" title="${esc(d.file)}">${esc(d.date)} · ${esc(d.file)} · ${(d.size / 1048576).toFixed(1)} MB</span>
+      <button type="button" class="remove" data-file="${esc(d.file)}" aria-label="Remove ${esc(d.file)}" ${polling ? 'disabled' : ''}>Remove</button>
+      ${p.reason ? `<span class="doc-reason">${esc(p.reason)}</span>` : ''}</li>`;
+  }).join('');
+}
+
+function renderRelease() {
+  const r = state.release, s = state.settings;
+  $('preview').setAttribute('aria-disabled', String(!r));
+  if (!r) {
+    $('release').innerHTML = '<p class="big">No release yet.</p><p>Build the dossier first; you can preview it here before anything is shared.</p>';
+  } else {
+    const when = new Date(r.built * 1000).toLocaleString();
+    $('release').innerHTML = `<p class="big">${esc(r.title)}</p>
+      <p>${r.documents.toLocaleString()} documents · ${r.passages.toLocaleString()} passages · built ${esc(when)}</p>
+      ${r.pages_without_text ? `<p><em>${r.pages_without_text} pages had no readable text; compare them with the originals before relying on searches.</em></p>` : ''}
+      ${r.trial_limit ? `<p><strong>Trial build of ${r.trial_limit} PDFs</strong> — build without a limit before publishing.</p>` : ''}`;
+  }
+  const blockers = [];
+  if (!r) blockers.push('build the dossier');
+  if (r?.trial_limit) blockers.push('build all PDFs');
+  if (!s.publish_to) blockers.push('enter a Hugging Face dataset above and save');
+  if (!state.signed_in) blockers.push('sign in by running ./wehpah login in a terminal, then reload this page');
+  $('publish-help').innerHTML = blockers.length
+    ? `Before publishing: ${blockers.map(esc).join('; ')}.`
+    : `Publishing uploads the release to <strong>huggingface.co/datasets/${esc(s.publish_to)}</strong>. Anyone with the link can then read every PDF and its extracted text.`;
+  $('confirm-text').textContent = r ? `I confirm these ${r.documents.toLocaleString()} PDFs and their text may be made public.` : 'I confirm these PDFs and their text may be made public.';
+  blocked = blockers.length > 0;
+  updateButtons();
+}
+
+function updateButtons() {
+  const busy = polling;
+  $('build').disabled = busy || !state?.settings?.title || !(state?.documents || []).length;
+  $('publish').disabled = busy || blocked || !$('confirm').checked;
+  $('confirm').disabled = busy || blocked;
+  $('add').disabled = busy;
+  document.querySelectorAll('.remove').forEach((b) => { b.disabled = busy; });
+}
+
+function setStage(index, finished = false) {
+  [...$('stages').children].forEach((li, i) => {
+    li.className = finished || i < index ? 'done' : i === index ? 'active' : '';
+  });
+}
+
+const statusEl = () => $(jobKind === 'publish' ? 'publish-status' : 'build-status');
+
+function handleLine(line) {
+  const log = $('log');
+  log.textContent += line + '\n';
+  const tag = line.match(/^\[(\w+)\]/)?.[1];
+  if (jobKind === 'build' && tag in STAGES) setStage(STAGES[tag]);
+  const m = line.match(/^\[extract\] (\d+)\/(\d+) (FAILED )?(.+?\.pdf): (.*)$/i);
+  if (m) {
+    progress[m[4]] = m[3] ? { status: 'failed', reason: m[5] } : { status: 'read' };
+    $('bar').hidden = false;
+    $('bar').firstElementChild.style.width = `${(100 * m[1]) / m[2]}%`;
+    $('build-status').textContent = `Reading PDFs: ${m[1]} of ${m[2]}`;
+    renderDocs();
+  } else if (/^\[extract\] .* to read/.test(line)) {
+    $('build-status').textContent = line.replace(/^\[extract\] /, '');
+  } else if (tag === 'index' || tag === 'subjects' || tag === 'export' || tag === 'publish') {
+    statusEl().textContent = line.replace(/^\[\w+\] /, '');
+  } else if (tag === 'report' || tag === 'recover') {
+    $('report').hidden = false;
+    $('report').insertAdjacentHTML('beforeend', `<p>${esc(line.replace(/^\[\w+\] /, ''))}</p>`);
+  }
+}
+
+async function poll() {
+  polling = true;
+  updateButtons();
+  try {
+    for (;;) {
+      const job = await api(`/api/job?since=${cursor}`);
+      if (!job.job) break;
+      jobKind = job.job;
+      job.lines.forEach(handleLine);
+      cursor = job.total;
+      if (!job.running) {
+        const lines = $('log').textContent.trim().split('\n');
+        const stopped = lines.reverse().find((l) => l.startsWith('Stopped:') || /Error|Traceback/.test(l));
+        const target = statusEl();
+        if (job.code === 0) {
+          if (jobKind === 'build') { setStage(0, true); $('bar').firstElementChild.style.width = '100%'; }
+          target.textContent = jobKind === 'build' ? 'Done. The new release passed every check.' : 'Published.';
+        } else {
+          target.textContent = `${jobKind === 'build' ? 'The build' : 'Publishing'} stopped: ${(stopped || 'see the technical log').replace(/^Stopped:\s*/, '')}`;
+        }
+        break;
+      }
+      await new Promise((r) => setTimeout(r, 1000));
+    }
+  } finally {
+    polling = false;
+    await refresh();
+  }
+}
+
+async function start(path, body) {
+  $('log').textContent = ''; $('report').innerHTML = ''; $('report').hidden = true; $('build-status').textContent = ''; $('publish-status').textContent = '';
+  progress = {}; cursor = 0; setStage(-1);
+  jobKind = path.endsWith('publish') ? 'publish' : 'build';
+  try { await api(path, body); } catch (e) { statusEl().textContent = e.message; return; }
+  poll();
+}
+
+$('settings').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const form = e.target;
+  $('settings-error').hidden = true;
+  try {
+    await api('/api/settings', { title: form.title.value, description: form.description.value, publish_to: form.publish_to.value, pdfs: form.pdfs.value });
+    $('saved').hidden = false; setTimeout(() => { $('saved').hidden = true; }, 1600);
+    await refresh();
+  } catch (err) { $('settings-error').textContent = err.message; $('settings-error').hidden = false; }
+});
+async function addFiles(list) {
+  const files = [...list].filter((f) => /\.pdf$/i.test(f.name));
+  if (!files.length) { $('docs-status').textContent = 'Only PDF files can be added.'; return; }
+  const existing = new Set((state.documents || []).map((d) => d.file));
+  const replacing = files.filter((f) => existing.has(f.name));
+  if (replacing.length && !confirm(`Replace ${replacing.length === 1 ? replacing[0].name : `${replacing.length} existing PDFs`} with the new version?`)) return;
+  const problems = [];
+  for (const [i, file] of files.entries()) {
+    $('docs-status').textContent = `Adding ${i + 1} of ${files.length}: ${file.name}`;
+    const res = await fetch(`/api/upload?name=${encodeURIComponent(file.name)}`, { method: 'POST', headers: { 'Content-Type': 'application/pdf' }, body: file });
+    if (!res.ok) problems.push((await res.json()).error || file.name);
+  }
+  const added = files.length - problems.length;
+  $('docs-status').textContent = [added && `Added ${added} PDF${added === 1 ? '' : 's'}. Build again to include ${added === 1 ? 'it' : 'them'}.`, ...problems].filter(Boolean).join(' ');
+  await refresh();
+}
+
+$('choose-folder').addEventListener('click', async () => {
+  const button = $('choose-folder');
+  button.disabled = true;
+  button.textContent = 'Choosing…';
+  try {
+    const { folder } = await api('/api/choose-folder', {});
+    if (folder) { $('settings').pdfs.value = folder; $('settings').requestSubmit(); }
+  } catch (err) { $('settings-error').textContent = err.message; $('settings-error').hidden = false; }
+  finally { button.disabled = false; button.textContent = 'Choose folder…'; }
+});
+$('add').addEventListener('click', () => $('files').click());
+$('files').addEventListener('change', (e) => { addFiles(e.target.files); e.target.value = ''; });
+$('open-folder').addEventListener('click', () => api('/api/open-folder', {}).catch((err) => { $('docs-status').textContent = err.message; }));
+$('docs').addEventListener('click', async (e) => {
+  const file = e.target.closest('.remove')?.dataset.file;
+  if (!file || !confirm(`Remove ${file} from the dossier? It will be moved to the "Removed PDFs" folder.`)) return;
+  try {
+    await api('/api/remove', { file });
+    $('docs-status').textContent = `Removed ${file}. Build again to take it out of the dossier.`;
+  } catch (err) { $('docs-status').textContent = err.message; }
+  await refresh();
+});
+const zone = $('docs-section');
+zone.addEventListener('dragover', (e) => { if (polling) return; e.preventDefault(); zone.classList.add('dropping'); });
+zone.addEventListener('dragleave', (e) => { if (!zone.contains(e.relatedTarget)) zone.classList.remove('dropping'); });
+zone.addEventListener('drop', (e) => { e.preventDefault(); zone.classList.remove('dropping'); if (!polling) addFiles(e.dataTransfer.files); });
+// Dropping a file anywhere else must not navigate away from the Studio.
+window.addEventListener('dragover', (e) => e.preventDefault());
+window.addEventListener('drop', (e) => e.preventDefault());
+
+$('build').addEventListener('click', () => start('/api/build', { force: $('force').checked }));
+$('confirm').addEventListener('change', () => updateButtons());
+$('publish').addEventListener('click', () => { $('confirm').checked && start('/api/publish', { confirm: true }); $('confirm').checked = false; });
+
+await refresh();
+const current = await api('/api/job?since=0');
+if (current.job) { if (current.running) poll(); }
+</script>
+</body>
+</html>

@@ -8,3 +8,5 @@ raw_pdfs/
 dist_data/
 GetDocument.aspx
 .zcode-site.json
+.wehpah-cache/
+.*-staging-*/

@@ -1,0 +1,16 @@
+# WeHPAH! dossier settings. Paths are relative to this file. Only `title` is required.
+title = "Microsoft Datacenter Dossier"
+description = ""
+pdfs = "raw_pdfs"
+output = "dist_data"
+cache = "ingestion/.cache"
+publish_to = "kolenyo/MS_Datacenter"
+
+# California Energy Commission docket names: TN230528_20191107T132749_Memo to Open New Docket.pdf
+[filenames]
+title = '^TN\d+_\d{8}T\d{6}_(.+)$'
+date = '^TN\d+_(\d{8})T'
+
+# [advanced]
+# workers = "auto"             # PDFs read at once; lower it if memory is short
+# full_page_ocr = false        # read every page as an image (slower; for poor scans)
