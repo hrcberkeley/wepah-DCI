@@ -123,6 +123,7 @@ async function boot() {
     }
   });
   el.expand.addEventListener('click', () => { setCompact(false); el.input.focus(); });
+  $('home-link').addEventListener('click', (e) => { e.preventDefault(); goHome(); });
   $('browse-timeline').addEventListener('click', () => browse('timeline', null));
   $('browse-laws').addEventListener('click', () => browse('laws', null));
   document.querySelectorAll('.view-option').forEach((b) => b.addEventListener('click', () => {
@@ -428,6 +429,34 @@ async function browse(view, passageIds) {
   } finally { state.searching = false; }
 }
 
+/** Back to the start: the full cover and an empty results column. */
+function goHome() {
+  if (state.searching) return;
+  state.activeCard = null;
+  el.summary.hidden = true;
+  el.count.hidden = true;
+  setView(null);
+  el.stream.innerHTML = '<div class="empty-state"><p class="empty-line">Matching passages will collect here.</p><p class="empty-hint">Search above &mdash; each result opens its original page, with the exact words highlighted.</p></div>';
+  setStatus('');
+  setCompact(false);
+  window.scrollTo(0, 0);
+  el.input.focus();
+}
+
+/** "← Start" for whole-dossier views, "← Results" for views of a search. */
+function backLink(scoped) {
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.className = 'back-link';
+  b.textContent = scoped ? '← Results' : '← Start';
+  b.addEventListener('click', () => {
+    if (!scoped) return goHome();
+    renderEvidenceCards(state.lastRows, state.mode, state.lastQuery);
+    setView('passages');
+  });
+  el.count.prepend(b, ' ');
+}
+
 function scopeLabel(scoped) {
   return scoped ? `in these results · “${escapeHtml(state.lastQuery)}”` : 'whole dossier';
 }
@@ -460,6 +489,7 @@ function emptyView(line, hint) {
 function renderTimeline(events, scoped) {
   el.count.hidden = false;
   el.count.innerHTML = `<b>${events.length}${events.length >= 5000 ? '+' : ''} date${events.length === 1 ? '' : 's'}</b> · ${scopeLabel(scoped)}`;
+  backLink(scoped);
   if (!events.length) return emptyView('No dates appear in these passages.', 'Try “Explore Concepts” with a wider description, or open the whole-dossier timeline from the cover.');
   el.stream.innerHTML = '';
   let year = '';
@@ -485,6 +515,7 @@ function renderLawIndex(laws, passageIds) {
   const scoped = Array.isArray(passageIds);
   el.count.hidden = false;
   el.count.innerHTML = `<b>${laws.length} law${laws.length === 1 ? '' : 's'} and cases cited</b> · ${scopeLabel(scoped)}`;
+  backLink(scoped);
   if (!laws.length) return emptyView('No laws or cases are cited in these passages.', 'Open “Laws & cases cited” on the cover to see the whole dossier.');
   el.stream.innerHTML = '';
   for (const [idx, law] of laws.entries()) {

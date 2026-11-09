@@ -1031,3 +1031,6 @@ mark.exact-hit {
 .provision-more { font: 12px/1.4 var(--font-mono); color: var(--ink-3); }
 .claim-key { font-weight: 600; }
 .law-entry .entry-doc { white-space: normal; overflow: visible; }
+.home-link { color: inherit; text-decoration: none; }
+.home-link:hover .masthead-bang, .home-link:focus-visible .masthead-bang { color: var(--gold-ink); }
+body.compact .home-link { cursor: pointer; }
