@@ -12,4 +12,5 @@ dependencies = [
     "pypdfium2>=4.30",
     "huggingface_hub>=0.26",
     "pyarrow>=17.0",
+    "eyecite>=2.7.8",
 ]

@@ -42,6 +42,8 @@ const state = {
   repository: DEFAULT_REPO,
   searching: false,
   switching: false,
+  lastRows: [],          // the passages of the latest search, for "Timeline" / "Laws cited" of these results
+  lastQuery: '',
 };
 
 const el = {
@@ -121,6 +123,12 @@ async function boot() {
     }
   });
   el.expand.addEventListener('click', () => { setCompact(false); el.input.focus(); });
+  $('browse-timeline').addEventListener('click', () => browse('timeline', null));
+  $('browse-laws').addEventListener('click', () => browse('laws', null));
+  document.querySelectorAll('.view-option').forEach((b) => b.addEventListener('click', () => {
+    if (b.dataset.view === 'passages') { renderEvidenceCards(state.lastRows, state.mode, state.lastQuery); setView('passages'); }
+    else browse(b.dataset.view, state.lastRows.map((r) => r.passage_id));
+  }));
 
   try {
     await db.initEngine(state.dossier);
@@ -130,7 +138,12 @@ async function boot() {
     el.button.disabled = true;
     return;
   }
+  updateBrowseLinks();
   el.input.focus();
+}
+
+function updateBrowseLinks() {
+  $('browse-links').hidden = !db.hasEntities();
 }
 
 function updateDossierHeading() {
@@ -152,6 +165,8 @@ function selectDossier(repo, manifest) {
   el.stream.innerHTML = '<div class="empty-state"><p class="empty-line">This dossier is ready.</p><p class="empty-hint">Search above to inspect its documents.</p></div>';
   pdfStage.reset();
   updateDossierHeading();
+  updateBrowseLinks();
+  setView(null);
   setCompact(false);
   setStatus(`${manifest.title} is ready — ${manifest.document_count.toLocaleString()} documents.`);
 }
@@ -207,16 +222,19 @@ async function runSearch() {
     if (state.mode === 'exact') {
       const rows = await db.keywordSearch(query);
       renderEvidenceCards(rows, 'exact', query);
+      rememberResults(rows, query);
       setStatus(rows.length
         ? `Found ${rows.length} passage${rows.length === 1 ? '' : 's'} containing your exact words.`
         : 'No passages contain those exact words. Try fewer words, or switch to “Explore Concepts”.', false);
     } else if (state.mode === 'concepts') {
       const rows = await db.conceptSearch(query);
       renderEvidenceCards(rows, 'concepts', query);
+      rememberResults(rows, query);
       setStatus(rows.length
         ? `Found ${rows.length} related passage${rows.length === 1 ? '' : 's'}. Click a card to see the original page.`
         : 'Nothing closely related yet. Try describing the topic with different words.', false);
     } else {
+      setView(null);
       await startDossier(query);
     }
   } catch (err) {
@@ -363,6 +381,208 @@ function openGrounding(row) {
   });
 }
 
+// ---------- Timeline & laws cited ----------
+// Both read small tables built from the passage text (ingestion/entities.py): every
+// date and citation shown is the exact wording on the page, so no checking step can fail.
+
+function rememberResults(rows, query) {
+  state.lastRows = rows;
+  state.lastQuery = query;
+  setView(rows.length && db.hasEntities() ? 'passages' : null);
+}
+
+/** The Passages / Timeline / Laws cited switch under the results count; null hides it. */
+function setView(view) {
+  const sw = $('view-switch');
+  sw.hidden = !view;
+  sw.querySelectorAll('.view-option').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.view === view)));
+}
+
+const MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+function formatDate(iso, precision) {
+  const [y, m, d] = iso.split('-').map(Number);
+  return precision === 'day' ? `${MONTH_NAMES[m - 1]} ${d}, ${y}` : `${MONTH_NAMES[m - 1]} ${y}`;
+}
+
+async function browse(view, passageIds) {
+  if (state.searching || state.switching || !db.isReady()) return;
+  const scoped = Array.isArray(passageIds);
+  state.searching = true;
+  setCompact(true);
+  el.summary.hidden = true;
+  if (!scoped) { setView(null); state.lastRows = []; }
+  else setView(view);
+  renderStreamLoading();
+  setStatus(view === 'timeline' ? 'Putting the dated passages in order…' : 'Gathering the laws and cases cited…', true);
+  try {
+    if (view === 'timeline') {
+      renderTimeline(await db.timeline(passageIds), scoped);
+    } else {
+      renderLawIndex(await db.authorityIndex(passageIds), passageIds);
+    }
+    setStatus('Every date and citation is quoted exactly as written — click one to see its page.', false);
+  } catch (err) {
+    console.error(err);
+    renderStreamError();
+    setStatus('This view could not be opened. Please try again.', false);
+  } finally { state.searching = false; }
+}
+
+function scopeLabel(scoped) {
+  return scoped ? `in these results · “${escapeHtml(state.lastQuery)}”` : 'whole dossier';
+}
+
+function placeEntry(row, idx, { head, tag, quoteHtml, meta }) {
+  const card = document.createElement('article');
+  card.className = 'entry';
+  card.style.setProperty('--i', Math.min(idx, 20));
+  card.innerHTML = `
+    <header class="entry-head">
+      ${head}
+      <span class="entry-page">p. ${row.page_number}</span>
+      ${tag ? `<span class="entry-tag tag-related">${tag}</span>` : ''}
+    </header>
+    <p class="entry-passage">${quoteHtml}</p>
+    ${meta ? `<p class="entry-meta">${meta}</p>` : ''}`;
+  card.addEventListener('click', () => {
+    if (state.activeCard) state.activeCard.classList.remove('active');
+    state.activeCard = card;
+    card.classList.add('active');
+    openGrounding(row);
+  });
+  return card;
+}
+
+function emptyView(line, hint) {
+  el.stream.innerHTML = `<div class="empty-state"><p class="empty-line">${line}</p><p class="empty-hint">${hint}</p></div>`;
+}
+
+function renderTimeline(events, scoped) {
+  el.count.hidden = false;
+  el.count.innerHTML = `<b>${events.length}${events.length >= 5000 ? '+' : ''} date${events.length === 1 ? '' : 's'}</b> · ${scopeLabel(scoped)}`;
+  if (!events.length) return emptyView('No dates appear in these passages.', 'Try “Explore Concepts” with a wider description, or open the whole-dossier timeline from the cover.');
+  el.stream.innerHTML = '';
+  let year = '';
+  for (const [idx, ev] of events.entries()) {
+    if (ev.date.slice(0, 4) !== year) {
+      year = ev.date.slice(0, 4);
+      const rule = document.createElement('h3');
+      rule.className = 'year-rule';
+      rule.textContent = year;
+      el.stream.appendChild(rule);
+    }
+    const n = Number(ev.mentions);
+    el.stream.appendChild(placeEntry(ev, idx, {
+      head: `<span class="entry-date">${formatDate(ev.date, ev.precision)}</span>
+             <h3 class="entry-doc" title="${escapeHtml(ev.doc_title)}">${escapeHtml(ev.doc_title)}</h3>`,
+      quoteHtml: highlightExactPhrase(ev.sentence, ev.date_text),
+      meta: n > 1 ? `Mentioned ${n} times in this document` : '',
+    }));
+  }
+}
+
+function renderLawIndex(laws, passageIds) {
+  const scoped = Array.isArray(passageIds);
+  el.count.hidden = false;
+  el.count.innerHTML = `<b>${laws.length} law${laws.length === 1 ? '' : 's'} and cases cited</b> · ${scopeLabel(scoped)}`;
+  if (!laws.length) return emptyView('No laws or cases are cited in these passages.', 'Open “Laws & cases cited” on the cover to see the whole dossier.');
+  el.stream.innerHTML = '';
+  for (const [idx, law] of laws.entries()) {
+    const item = document.createElement('article');
+    item.className = 'entry law-entry';
+    item.style.setProperty('--i', Math.min(idx, 20));
+    const provisions = Array.from(law.provisions ?? []);
+    item.innerHTML = `
+      <header class="entry-head">
+        <h3 class="entry-doc" title="${escapeHtml(law.instrument)}">${escapeHtml(law.instrument)}</h3>
+        <span class="entry-tag tag-related">${Number(law.mentions)} citation${Number(law.mentions) === 1 ? '' : 's'} · ${Number(law.documents)} doc${Number(law.documents) === 1 ? '' : 's'}</span>
+      </header>
+      ${provisions.length ? `<p class="law-provisions">${provisions.slice(0, 24).map((p) => `<button type="button" class="provision" data-p="${escapeHtml(p)}">§ ${escapeHtml(p)}</button>`).join('')}${provisions.length > 24 ? `<span class="provision-more">+${provisions.length - 24} more</span>` : ''}</p>` : ''}`;
+    item.addEventListener('click', (e) => {
+      const p = e.target.closest('.provision')?.dataset.p || '';
+      showCitations(law.instrument, p, passageIds);
+    });
+    el.stream.appendChild(item);
+  }
+}
+
+async function showCitations(instrument, provision, passageIds) {
+  if (state.searching) return;
+  state.searching = true;
+  renderStreamLoading();
+  try {
+    const rows = await db.authorityCitations(instrument, provision, passageIds);
+    const label = `${instrument}${provision ? ` § ${provision}` : ''}`;
+    el.count.hidden = false;
+    el.count.innerHTML = `<button type="button" class="back-link">← All laws</button> <b>${rows.length} passage${rows.length === 1 ? '' : 's'}</b> · ${escapeHtml(label)}`;
+    el.count.querySelector('.back-link').addEventListener('click', () => browse('laws', passageIds));
+    el.stream.innerHTML = '';
+    for (const [idx, row] of rows.entries()) {
+      el.stream.appendChild(placeEntry(row, idx, {
+        head: `<h3 class="entry-doc" title="${escapeHtml(row.doc_title)}">${escapeHtml(row.doc_title)}</h3>`,
+        tag: row.provision ? `§ ${escapeHtml(row.provision)}` : '',
+        quoteHtml: highlightExactPhrase(row.sentence, row.cite_text),
+      }));
+    }
+  } catch (err) {
+    console.error(err);
+    renderStreamError();
+  } finally { state.searching = false; }
+}
+
+// "When did…?" and "Which law…?" questions are answered from the same tables:
+// dates and citations found in the passages closest to the question, best match first.
+const WHEN_RE = /^\s*(when\b|what (date|day|year|month)\b|on what date|by what date|since when|how long ago)/i;
+const LAW_RE = /\b(which|what) (laws?|statutes?|regulations?|codes?|acts?|sections?|cases?|rules?|authorit(y|ies))\b/i;
+
+async function answerFromEntities(query, ranked) {
+  const kind = WHEN_RE.test(query) ? 'when' : LAW_RE.test(query) ? 'law' : null;
+  if (!kind || !db.hasEntities()) return false;
+  const top = ranked.slice(0, 40);
+  const rank = new Map(top.map((r, i) => [r.passage_id, i]));
+  const ids = top.map((r) => r.passage_id);
+  let found = kind === 'when'
+    ? await db.timeline(ids)
+    : (await Promise.all((await db.authorityIndex(ids, 12)).map((l) => db.authorityCitations(l.instrument, '', ids, 3)))).flat();
+  // Same exact-quote gate as every other answer line.
+  found = found.filter((f) => rank.has(f.passage_id)
+    && verifier.isGrounded(f.sentence, top[rank.get(f.passage_id)].passage_text))
+    .sort((a, b) => rank.get(a.passage_id) - rank.get(b.passage_id));
+  if (kind === 'law') {
+    const seen = new Set();
+    found = found.filter((f) => !seen.has(f.instrument) && seen.add(f.instrument));
+  }
+  if (!found.length) return false;
+  found = found.slice(0, 8);
+
+  renderEvidenceCards(top.filter((r) => found.some((f) => f.passage_id === r.passage_id)), 'dossier', query);
+  el.summary.innerHTML = `
+    <h2>${kind === 'when' ? 'Dates from the Record' : 'Laws and Cases from the Record'}</h2>
+    <p class="dossier-q">For “${escapeHtml(query)}”</p>
+    <ol id="claim-list"></ol>
+    <p class="dossier-coverage">${kind === 'when' ? 'Dates' : 'Citations'} found in the ${top.length} passages closest to your question, closest first</p>`;
+  const list = el.summary.querySelector('#claim-list');
+  for (const f of found) {
+    const li = document.createElement('li');
+    li.className = 'claim-row';
+    const label = kind === 'when' ? formatDate(f.date, f.precision) : `${f.instrument}${f.provision ? ` § ${f.provision}` : ''}`;
+    li.innerHTML = `<span class="claim-text"><b class="claim-key">${escapeHtml(label)}</b> — ${highlightExactPhrase(f.sentence, kind === 'when' ? f.date_text : f.cite_text)}</span>`;
+    const pill = document.createElement('button');
+    pill.type = 'button';
+    pill.className = 'verify-pill';
+    pill.textContent = `verify · ${f.doc_title}, p. ${f.page_number}`;
+    pill.dataset.quote = f.sentence;
+    pill.addEventListener('click', () => openGrounding(f));
+    li.appendChild(pill);
+    list.appendChild(li);
+  }
+  el.summary.hidden = false;
+  setStatus(kind === 'when'
+    ? 'Dates are quoted exactly as written. If documents disagree, each version is listed.'
+    : 'Citations are quoted exactly as written — click one to see its page.', false);
+  return true;
+}
+
 // ---------- Ask the Dossier (§5.4) ----------
 
 // The answering helper reads BATCH passages at a time (that is what fits its
@@ -445,6 +665,7 @@ async function startDossier(query) {
     setStatus('No matching passages were found for that question.', false);
     return;
   }
+  if (await answerFromEntities(query, ranked)) { run = null; return; }
   await readMore(r, DEPTHS[depth].read);
 }
 

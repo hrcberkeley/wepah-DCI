@@ -620,6 +620,25 @@ def stage_export(all_rows: list[dict], out_dir: Path) -> None:
     con.close()
 
 
+def stage_entities(all_rows: list[dict], out_dir: Path) -> dict:
+    """Dated events and cited authorities -> events.parquet / authorities.parquet (see entities.py)."""
+    import duckdb
+    import pyarrow as pa
+    import entities
+
+    events, authorities = entities.extract(all_rows)
+    con = duckdb.connect(":memory:")
+    for name, rows, order in (("events", events, "date, doc_id, page_number, passage_id"),
+                              ("authorities", authorities, "instrument, provision, doc_id, page_number, passage_id")):
+        con.register("t", pa.Table.from_pylist(rows) if rows else pa.table({"passage_id": pa.array([], pa.string())}))
+        safe = (out_dir / f"{name}.parquet").as_posix().replace("'", "''")
+        con.execute(f"COPY (SELECT * FROM t {'ORDER BY ' + order if rows else ''}) TO '{safe}' (FORMAT PARQUET, ROW_GROUP_SIZE 2000, COMPRESSION ZSTD)")
+        con.unregister("t")
+    con.close()
+    print(f"[entities] {len(events)} dated mentions · {len(authorities)} citations of laws, regulations and cases", flush=True)
+    return {"event_count": len(events), "authority_count": len(authorities)}
+
+
 def verify_shards(con, shard_dir: Path, expected_rows: int) -> None:
     """Check every shard against the corpus before a release is published."""
     expected = {int(row[0]): int(row[1]) for row in con.execute(
@@ -679,6 +698,15 @@ def verify_corpus(out_dir: Path) -> dict:
             raise ValueError("Unsupported cluster shard path")
         verify_shards(con, out_dir / "clusters", n)
     assert n > 0, "corpus.parquet is empty"
+    for key in ("events_path", "authorities_path"):
+        if key in manifest:
+            path = out_dir / manifest[key]
+            if manifest[key] not in ("events.parquet", "authorities.parquet") or not path.is_file():
+                raise ValueError(f"The release is missing {manifest[key]}")
+            safe = path.as_posix().replace("'", "''")
+            orphans = con.execute(f"SELECT COUNT(*) FROM read_parquet('{safe}') e ANTI JOIN corpus c USING (passage_id)").fetchone()[0]
+            if orphans:
+                raise ValueError(f"{manifest[key]} cites {orphans} passages that are not in the corpus")
 
     bad = con.execute(
         """
@@ -787,13 +815,15 @@ def build(settings, limit: int = 0, force: bool = False, workers: int | None = N
             sources.append({"filename": p.name, "doc_id": slugify(p.name), "sha256": source_hashes[p.name]})
         model_revision = stage_embed_and_cluster(all_rows, staging, settings.cache)
         stage_export(all_rows, staging)
+        entity_counts = stage_entities(all_rows, staging)
         empty_pages = pages_without_text(extracted)
         manifest = {
             "schema_version": 1, "title": settings.title, "description": settings.description,
             "document_count": len(extracted), "passage_count": len(all_rows),
             "model_id": CENTROIDS_MODEL_ID, "dimensions": EMBED_DIM, "config": "default", "split": "train",
             "corpus_path": "corpus.parquet", "centroids_path": "centroids.json", "pdfs_path": "pdfs",
-            "clusters_path": "clusters",
+            "clusters_path": "clusters", "events_path": "events.parquet", "authorities_path": "authorities.parquet",
+            **entity_counts,
             "build": {"cache_version": CACHE_VERSION, "source_files": sources,
                       "trial_limit": limit or None,
                       "pages_without_text": empty_pages,

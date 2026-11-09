@@ -69,6 +69,9 @@
 
           <div class="search-footnotes">
             <p id="helper-copy" class="helper-copy"><em>Finds documents containing your exact words, just like Ctrl+F across every file at once.</em></p>
+            <p id="browse-links" class="browse-links" hidden>Or browse the whole dossier:
+              <button id="browse-timeline" type="button">Timeline</button>
+              <button id="browse-laws" type="button">Laws &amp; cases cited</button></p>
           </div>
 
           <button id="expand-header" class="expand-header" type="button" aria-label="Expand search cover" title="Back to the full search cover" aria-expanded="false">
@@ -88,6 +91,11 @@
       <section id="left-pane" class="left-pane" aria-label="Evidence stream">
         <div class="results-head">
           <p id="results-count" class="results-count" hidden></p>
+          <div id="view-switch" class="view-switch" role="group" aria-label="Show these results as" hidden>
+            <button type="button" class="view-option" data-view="passages" aria-pressed="true">Passages</button>
+            <button type="button" class="view-option" data-view="timeline" aria-pressed="false">Timeline</button>
+            <button type="button" class="view-option" data-view="laws" aria-pressed="false">Laws cited</button>
+          </div>
         </div>
         <div id="dossier-summary" class="dossier-summary" hidden></div>
         <div id="evidence-stream" class="evidence-stream">

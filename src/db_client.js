@@ -398,6 +398,52 @@ export async function candidatePassages(query, k = 40) {
   return pool;
 }
 
+// ---------- dated events & cited authorities (built by ingestion/entities.py) ----------
+const PLACE_COLUMNS = 'passage_id, doc_id, doc_title, page_number, bbox_x_pct, bbox_y_pct, bbox_w_pct, bbox_h_pct, sentence';
+
+export function hasEntities() { return !!(activeDossier?.events_path && activeDossier?.authorities_path); }
+
+function idList(ids) { return ids.map(sqlString).join(', '); }
+
+/** Dated mentions, one per (date, document), oldest first. Optional: only these passages. */
+export async function timeline(passageIds = null, limit = 5000) {
+  if (!hasEntities() || (passageIds && !passageIds.length)) return [];
+  const file = await registerParquet(dataUrl(activeDossier.events_path));
+  const where = passageIds ? `WHERE passage_id IN (${idList(passageIds)})` : '';
+  return rowsToObjects(await runQuery(`
+    SELECT date, precision, date_text, ${PLACE_COLUMNS}, mentions FROM (
+      SELECT *, row_number() OVER (PARTITION BY date, doc_id ORDER BY page_number, passage_id) AS rn,
+             count(*) OVER (PARTITION BY date, doc_id) AS mentions
+      FROM read_parquet('${file}') ${where}
+    ) WHERE rn = 1 ORDER BY date, doc_id LIMIT ${Math.trunc(limit)};`));
+}
+
+/** Laws, regulations and cases with how often and in how many documents each is cited. */
+export async function authorityIndex(passageIds = null, limit = 300) {
+  if (!hasEntities() || (passageIds && !passageIds.length)) return [];
+  const file = await registerParquet(dataUrl(activeDossier.authorities_path));
+  const where = passageIds ? `WHERE passage_id IN (${idList(passageIds)})` : '';
+  return rowsToObjects(await runQuery(`
+    SELECT instrument, count(*) AS mentions, count(DISTINCT doc_id) AS documents,
+           list(DISTINCT provision ORDER BY provision) FILTER (WHERE provision <> '') AS provisions
+    FROM read_parquet('${file}') ${where}
+    GROUP BY instrument ORDER BY mentions DESC, instrument LIMIT ${Math.trunc(limit)};`));
+}
+
+/** Every citation of one law (optionally one section), one per passage. */
+export async function authorityCitations(instrument, provision = '', passageIds = null, limit = 200) {
+  if (!hasEntities()) return [];
+  const file = await registerParquet(dataUrl(activeDossier.authorities_path));
+  const where = [`instrument = ${sqlString(instrument)}`];
+  if (provision) where.push(`provision = ${sqlString(provision)}`);
+  if (passageIds) where.push(passageIds.length ? `passage_id IN (${idList(passageIds)})` : 'false');
+  return rowsToObjects(await runQuery(`
+    SELECT instrument, provision, cite_text, ${PLACE_COLUMNS} FROM (
+      SELECT *, row_number() OVER (PARTITION BY passage_id ORDER BY provision) AS rn
+      FROM read_parquet('${file}') WHERE ${where.join(' AND ')}
+    ) WHERE rn = 1 ORDER BY doc_id, page_number, passage_id LIMIT ${Math.trunc(limit)};`));
+}
+
 // ---------- helpers ----------
 /** Escape a JS string as a DuckDB string literal. */
 function sqlString(s) {
