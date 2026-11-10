@@ -79,7 +79,7 @@ async function boot() {
   dossierToggle.addEventListener('click', () => showPanel(dossierPanel.hidden));
   $('dossier-form').addEventListener('submit', async (event) => {
     event.preventDefault();
-    if (state.searching) return;
+    if (state.searching || state.switching) return;
     state.switching = true;
     dossierError.hidden = true;
     const submit = $('dossier-form').querySelector('button[type="submit"]');
@@ -96,7 +96,12 @@ async function boot() {
       dossierError.hidden = false;
     } finally { submit.disabled = false; el.button.disabled = false; state.switching = false; }
   });
-  $('dossier-default').addEventListener('click', () => { $('dossier-url').value = DEFAULT_REPO; $('dossier-form').requestSubmit(); });
+  document.querySelectorAll('.dossier-default').forEach((button) => {
+    button.addEventListener('click', () => {
+      $('dossier-url').value = button.dataset.repo;
+      $('dossier-form').requestSubmit();
+    });
+  });
   try {
     state.dossier = CONFIG.HF_DATASET_REPO
       ? await loadDossier(CONFIG.HF_DATASET_REPO)
