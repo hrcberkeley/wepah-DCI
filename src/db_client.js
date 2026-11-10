@@ -431,17 +431,18 @@ export async function authorityIndex(passageIds = null, limit = 300) {
 }
 
 /** Every citation of one law (optionally one section), one per passage. */
-export async function authorityCitations(instrument, provision = '', passageIds = null, limit = 200) {
+export async function authorityCitations(instrument, provision = '', passageIds = null, limit = 200, along = null) {
   if (!hasEntities()) return [];
+  const shared = await sharedWith(along);
   const file = await registerParquet(dataUrl(activeDossier.authorities_path));
   const where = [`instrument = ${sqlString(instrument)}`];
   if (provision) where.push(`provision = ${sqlString(provision)}`);
   if (passageIds) where.push(passageIds.length ? `passage_id IN (${idList(passageIds)})` : 'false');
-  return rowsToObjects(await runQuery(`
-    SELECT instrument, provision, cite_text, ${PLACE_COLUMNS} FROM (
-      SELECT *, row_number() OVER (PARTITION BY passage_id ORDER BY provision) AS rn
+  return attachAlong(rowsToObjects(await runQuery(`
+    SELECT instrument, provision, cite_text, ${PLACE_COLUMNS}, shared FROM (
+      SELECT *, ${shared} AS shared, row_number() OVER (PARTITION BY passage_id ORDER BY provision) AS rn
       FROM read_parquet('${file}') WHERE ${where.join(' AND ')}
-    ) WHERE rn = 1 ORDER BY doc_id, page_number, passage_id LIMIT ${Math.trunc(limit)};`));
+    ) WHERE rn = 1 ORDER BY shared DESC, doc_id, page_number, passage_id LIMIT ${Math.trunc(limit)};`)), along);
 }
 
 // ---------- people & organizations (built by ingestion/names.py) ----------
@@ -464,16 +465,17 @@ export async function nameIndex(group, passageIds = null, limit = 5000) {
 }
 
 /** Every mention of one person or organization, one per passage. */
-export async function nameMentions(entity, passageIds = null, limit = 300) {
+export async function nameMentions(entity, passageIds = null, limit = 300, along = null) {
   if (!hasNames()) return [];
+  const shared = await sharedWith(along);
   const file = await registerParquet(dataUrl(activeDossier.names_path));
   const where = [`entity = ${sqlString(entity)}`];
   if (passageIds) where.push(passageIds.length ? `passage_id IN (${idList(passageIds)})` : 'false');
-  return rowsToObjects(await runQuery(`
-    SELECT entity, kind, role, mention_text, ${PLACE_COLUMNS} FROM (
-      SELECT *, row_number() OVER (PARTITION BY passage_id ORDER BY role DESC) AS rn
+  return attachAlong(rowsToObjects(await runQuery(`
+    SELECT entity, kind, role, mention_text, ${PLACE_COLUMNS}, shared FROM (
+      SELECT *, ${shared} AS shared, row_number() OVER (PARTITION BY passage_id ORDER BY role DESC) AS rn
       FROM read_parquet('${file}') WHERE ${where.join(' AND ')}
-    ) WHERE rn = 1 ORDER BY role = '' , doc_id, page_number, passage_id LIMIT ${Math.trunc(limit)};`));
+    ) WHERE rn = 1 ORDER BY shared DESC, role = '' , doc_id, page_number, passage_id LIMIT ${Math.trunc(limit)};`)), along);
 }
 
 // ---------- links between names, laws and dates ----------
@@ -490,6 +492,28 @@ function subjectSource(files, s) {
   if (s.t === 'name') return [files.names, `entity = ${sqlString(s.key)}`];
   if (s.t === 'law') return [files.laws, `instrument = ${sqlString(s.key)}${s.sub ? ` AND provision = ${sqlString(s.sub)}` : ''}`];
   return [files.dates, `date = ${sqlString(s.key)}`];
+}
+
+/** SQL that is true for passages also mentioning `along` (the page the reader came from), so a
+ *  list can open with the passages the two share. */
+async function sharedWith(along) {
+  if (!along) return 'false';
+  const [file, where] = subjectSource(await entityFiles(), along);
+  return file ? `passage_id IN (SELECT passage_id FROM read_parquet('${file}') WHERE ${where})` : 'false';
+}
+
+/** For passages shared with `along`: the sentence naming it there and its exact words
+ *  (along_sentence, along_text), so the reader sees both names in each shared passage. */
+async function attachAlong(rows, along) {
+  const ids = rows.filter((r) => r.shared).map((r) => r.passage_id);
+  if (!ids.length) return rows;
+  const [file, where] = subjectSource(await entityFiles(), along);
+  const col = { name: 'mention_text', law: 'cite_text', date: 'date_text' }[along.t];
+  const got = new Map(rowsToObjects(await runQuery(`
+    SELECT passage_id, min(sentence || chr(1) || ${col}) AS pair FROM read_parquet('${file}')
+    WHERE ${where} AND passage_id IN (${idList(ids)}) GROUP BY passage_id`)).map((r) => [r.passage_id, r.pair.split('\u0001')]));
+  for (const r of rows) [r.along_sentence, r.along_text] = got.get(r.passage_id) || [];
+  return rows;
 }
 
 /** Every name, law and date found in these passages: passage_id -> [{ t, text, key }]. */
@@ -546,14 +570,15 @@ export async function related(subject, limit = 12) {
 }
 
 /** Every passage that mentions one date, one per passage. */
-export async function dateMentions(date, limit = 300) {
+export async function dateMentions(date, limit = 300, along = null) {
   if (!hasEntities()) return [];
+  const shared = await sharedWith(along);
   const file = await registerParquet(dataUrl(activeDossier.events_path));
-  return rowsToObjects(await runQuery(`
-    SELECT date, precision, date_text, ${PLACE_COLUMNS} FROM (
-      SELECT *, row_number() OVER (PARTITION BY passage_id) AS rn
+  return attachAlong(rowsToObjects(await runQuery(`
+    SELECT date, precision, date_text, ${PLACE_COLUMNS}, shared FROM (
+      SELECT *, ${shared} AS shared, row_number() OVER (PARTITION BY passage_id) AS rn
       FROM read_parquet('${file}') WHERE date = ${sqlString(date)}
-    ) WHERE rn = 1 ORDER BY doc_id, page_number, passage_id LIMIT ${Math.trunc(limit)};`));
+    ) WHERE rn = 1 ORDER BY shared DESC, doc_id, page_number, passage_id LIMIT ${Math.trunc(limit)};`)), along);
 }
 
 // ---------- helpers ----------

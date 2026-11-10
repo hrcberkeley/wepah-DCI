@@ -1062,3 +1062,7 @@ a.entry-date.ent { color: var(--gold-ink); }
 .profile-row { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 14px; margin: 6px 0 0; font: 15px/1.45 var(--font-serif); }
 .profile-label { flex: 0 0 100%; font: 11px/1.4 var(--font-mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-3); }
 .profile-n { margin-left: 4px; font: 11px/1 var(--font-mono); color: var(--ink-3); }
+.year-rule.list-section { margin: 0; padding: 14px 26px 6px; font: 600 12px/1.4 var(--font-mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-2); border-bottom: 0; }
+.profile-more > summary { cursor: pointer; list-style: none; }
+.profile-more > summary::before { content: '▸ '; color: var(--gold-ink); }
+.profile-more[open] > summary::before { content: '▾ '; }

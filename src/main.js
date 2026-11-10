@@ -151,6 +151,8 @@ async function boot() {
 // ---------- links: every view has an address, so it can be shared and the browser's Back works ----------
 //   #/  #/timeline  #/laws  #/people  #/orgs  #/search/<mode>/<words>
 //   #/name/<entity>  #/law/<instrument>[/<section>]  #/date/<YYYY-MM[-DD]>
+//   any of the last three + /with/<another of them>: opened from that page, so the passages
+//   naming both come first
 const enc = encodeURIComponent;
 const linkTo = { name: (k) => `#/name/${enc(k)}`, law: (k) => `#/law/${enc(k)}`, date: (k) => `#/date/${k}` };
 
@@ -159,8 +161,20 @@ function go(hash) {
   else location.hash = hash;
 }
 
+const subjectPath = (s) => `${s.t}/${enc(s.key)}${s.sub ? `/${enc(s.sub)}` : ''}`;
+const withPath = (along) => (along ? `/with/${subjectPath(along)}` : '');
+
+function subjectLabel(s) {
+  if (s.t === 'date') return formatDate(s.key, s.key.length > 7 ? 'day' : 'month');
+  return `${s.key}${s.sub ? ` § ${s.sub}` : ''}`;
+}
+
 function route() {
-  const [what, a, b] = location.hash.replace(/^#\/?/, '').split('/').map((p) => decodeURIComponent(p || ''));
+  const parts = location.hash.replace(/^#\/?/, '').split('/').map((p) => decodeURIComponent(p || ''));
+  const w = parts.indexOf('with', 2);
+  const [t, key, sub] = w > 0 ? parts.slice(w + 1) : [];
+  const along = ['name', 'law', 'date'].includes(t) && key ? { t, key, sub } : null;
+  const [what, a, b] = w > 0 ? parts.slice(0, w) : parts;
   if (!what) return goHome();
   if (['timeline', 'laws', 'people', 'orgs'].includes(what)) return browse(what, null);
   if (what === 'search' && MODES[a] && b) {
@@ -168,9 +182,9 @@ function route() {
     el.input.value = b;
     return runSearch();
   }
-  if (what === 'name' && a) return showMentions(null, a, null);
-  if (what === 'law' && a) return showCitations(a, b || '', null);
-  if (what === 'date' && /^\d{4}-\d{2}(-\d{2})?$/.test(a)) return showDate(a);
+  if (what === 'name' && a) return showMentions(null, a, null, along);
+  if (what === 'law' && a) return showCitations(a, b || '', null, along);
+  if (what === 'date' && /^\d{4}-\d{2}(-\d{2})?$/.test(a)) return showDate(a, along);
 }
 
 function submitSearch() {
@@ -310,8 +324,9 @@ function escapeRegExp(s) { return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
 
 /** Highlight the same literal phrase that the database matched. */
 function highlightExactPhrase(text, query) {
-  if (!query) return escapeHtml(text);
-  const re = new RegExp(escapeRegExp(query), 'gi');
+  const phrases = (Array.isArray(query) ? query : [query]).filter(Boolean);
+  if (!phrases.length) return escapeHtml(text);
+  const re = new RegExp(phrases.map(escapeRegExp).join('|'), 'gi');
   let html = '';
   let start = 0;
   for (const hit of text.matchAll(re)) {
@@ -421,11 +436,12 @@ async function linkMentions(skip = null) {
   catch (err) { console.warn('links unavailable:', err); return; }
   for (const c of cards) {
     const ms = (found.get(c.dataset.passageId) || []).filter((m) => !(skip && m.t === skip.t && m.key === skip.key));
-    if (ms.length && c.isConnected) c.querySelector('.entry-passage').innerHTML = linkify(c.quote.text, ms, c.quote.mark);
+    if (ms.length && c.isConnected) c.querySelector('.entry-passage').innerHTML = linkify(c.quote.text, ms, c.quote.mark, skip);
   }
 }
 
-function linkify(text, mentions, mark) {
+/** `from`: the page these passages are on; links then open on the passages shared with it. */
+function linkify(text, mentions, mark, from = null) {
   const spans = [];
   const seen = new Set();
   for (const m of mentions) {
@@ -444,7 +460,7 @@ function linkify(text, mentions, mark) {
     if (sp.s < at) continue; // overlaps a longer mention already linked
     const title = { name: 'Open everything about', law: 'Open every citation of', date: 'Open everything dated' }[sp.m.t];
     html += highlightExactPhrase(text.slice(at, sp.s), mark)
-      + `<a class="ent ent-${sp.m.t}" href="${linkTo[sp.m.t](sp.m.key)}" title="${escapeHtml(`${title} ${sp.m.t === 'date' ? sp.m.text : sp.m.key}`)}">${highlightExactPhrase(text.slice(sp.s, sp.e), mark)}</a>`;
+      + `<a class="ent ent-${sp.m.t}" href="${linkTo[sp.m.t](sp.m.key)}${withPath(from)}" title="${escapeHtml(`${title} ${sp.m.t === 'date' ? sp.m.text : sp.m.key}`)}">${highlightExactPhrase(text.slice(sp.s, sp.e), mark)}</a>`;
     at = sp.e;
   }
   return html + highlightExactPhrase(text.slice(at), mark);
@@ -691,54 +707,78 @@ function renderNameIndex(group, names, passageIds) {
 
 /** One person's or organization's passages. With passageIds: only in those search results.
  *  Without: the whole dossier, headed by its profile (#/name/…). */
-async function showMentions(group, entity, passageIds) {
-  const rows = await loadList(() => db.nameMentions(entity, passageIds));
+async function showMentions(group, entity, passageIds, along = null) {
+  const rows = await loadList(() => db.nameMentions(entity, passageIds, 300, along));
   if (!rows) return;
   group ||= rows[0]?.kind === 'person' ? 'people' : 'orgs';
   const back = passageIds ? () => browse(group, passageIds) : () => go(`#/${group}`);
   listHead(`← All ${group === 'people' ? 'people' : 'organizations'}`, back, rows.length, entity);
+  const subject = { t: 'name', key: entity };
   if (!passageIds) {
     const roles = {};
     for (const r of rows) if (ROLE_LABEL[r.role]) roles[r.role] = (roles[r.role] || 0) + 1;
     const notes = [KIND_LABEL[rows[0]?.kind], ...Object.entries(roles).map(([r, n]) => `${ROLE_LABEL[r]} ${n}`)];
-    await profileHead({ t: 'name', key: entity }, entity, notes);
+    await profileHead(subject, entity, notes, !!along);
   }
-  for (const [idx, row] of rows.entries()) {
-    el.stream.appendChild(placeEntry(row, idx, {
-      head: docHead(row),
-      tag: ROLE_LABEL[row.role] ? escapeHtml(ROLE_LABEL[row.role]) : '',
-      quote: { text: row.sentence, mark: row.mention_text },
-    }));
-  }
-  finishList({ t: 'name', key: entity });
+  addRows(rows, along, entity, (row, idx) => placeEntry(row, idx, {
+    head: docHead(row),
+    tag: ROLE_LABEL[row.role] ? escapeHtml(ROLE_LABEL[row.role]) : '',
+    quote: withAlong(row, row.mention_text),
+  }));
+  finishList(subject);
 }
 
-async function showCitations(instrument, provision, passageIds) {
-  const rows = await loadList(() => db.authorityCitations(instrument, provision, passageIds, 300));
+async function showCitations(instrument, provision, passageIds, along = null) {
+  const rows = await loadList(() => db.authorityCitations(instrument, provision, passageIds, 300, along));
   if (!rows) return;
-  const label = `${instrument}${provision ? ` § ${provision}` : ''}`;
+  const subject = { t: 'law', key: instrument, sub: provision };
+  const label = subjectLabel(subject);
   listHead('← All laws', passageIds ? () => browse('laws', passageIds) : () => go('#/laws'), rows.length, label);
-  if (!passageIds) await profileHead({ t: 'law', key: instrument, sub: provision }, label, []);
-  for (const [idx, row] of rows.entries()) {
-    el.stream.appendChild(placeEntry(row, idx, {
-      head: docHead(row),
-      tag: row.provision ? `§ ${escapeHtml(row.provision)}` : '',
-      quote: { text: row.sentence, mark: row.cite_text },
-    }));
-  }
-  finishList({ t: 'law', key: instrument });
+  if (!passageIds) await profileHead(subject, label, [], !!along);
+  addRows(rows, along, label, (row, idx) => placeEntry(row, idx, {
+    head: docHead(row),
+    tag: row.provision ? `§ ${escapeHtml(row.provision)}` : '',
+    quote: withAlong(row, row.cite_text),
+  }));
+  finishList(subject);
 }
 
-async function showDate(date) {
-  const rows = await loadList(() => db.dateMentions(date));
+async function showDate(date, along = null) {
+  const rows = await loadList(() => db.dateMentions(date, 300, along));
   if (!rows) return;
-  const label = formatDate(date, date.length > 7 ? 'day' : 'month');
+  const subject = { t: 'date', key: date };
+  const label = subjectLabel(subject);
   listHead('← Timeline', () => go('#/timeline'), rows.length, label);
-  await profileHead({ t: 'date', key: date }, label, []);
+  await profileHead(subject, label, [], !!along);
+  addRows(rows, along, label, (row, idx) => placeEntry(row, idx, { head: docHead(row), quote: withAlong(row, row.date_text) }));
+  finishList(subject);
+}
+
+/** A list entry's quote: its sentence, and in a passage shared with the page the reader came from,
+ *  also the sentence naming that (each verbatim; "…" marks the gap between them). */
+function withAlong(row, mark) {
+  const mine = row.sentence;
+  const theirs = row.along_sentence;
+  if (!theirs || mine.includes(theirs)) return { text: mine, mark: [mark, row.along_text] };
+  if (theirs.includes(mine)) return { text: theirs, mark: [mark, row.along_text] };
+  return { text: `${mine} … ${theirs}`, mark: [mark, row.along_text] };
+}
+
+/** The list's passages; opened from another page (`along`), the passages naming both come first
+ *  under their own heading. */
+function addRows(rows, along, label, make) {
+  const shared = along ? rows.filter((r) => r.shared).length : 0;
+  const heading = (text) => {
+    const h = document.createElement('h3');
+    h.className = 'year-rule list-section';
+    h.textContent = text;
+    el.stream.appendChild(h);
+  };
+  if (shared) heading(`${shared} passage${shared === 1 ? '' : 's'} also naming ${subjectLabel(along)}`);
   for (const [idx, row] of rows.entries()) {
-    el.stream.appendChild(placeEntry(row, idx, { head: docHead(row), quote: { text: row.sentence, mark: row.date_text } }));
+    if (shared && idx === shared) heading(`Other passages naming ${label}`);
+    el.stream.appendChild(make(row, idx));
   }
-  finishList({ t: 'date', key: date });
 }
 
 const docHead = (row) => `<h3 class="entry-doc" title="${escapeHtml(row.doc_title)}">${escapeHtml(row.doc_title)}</h3>`;
@@ -776,7 +816,7 @@ function finishList(subject) {
 
 /** The top of a person's, organization's, law's or date's page: how much the record says about it,
  *  and what else is named in the same passages. Appearing together is shown as exactly that. */
-async function profileHead(subject, title, notes) {
+async function profileHead(subject, title, notes, folded = false) {
   let info;
   try { info = await db.related(subject); } catch (err) { console.warn('profile unavailable:', err); return; }
   const f = info.facts;
@@ -784,7 +824,7 @@ async function profileHead(subject, title, notes) {
   const facts = [...notes.filter(Boolean), `${Number(f.passages)} passage${Number(f.passages) === 1 ? '' : 's'}`,
     `${Number(f.documents)} document${Number(f.documents) === 1 ? '' : 's'}`, span].filter(Boolean).join(' · ');
   const group = (label, items, t, text) => (items.length ? `<p class="profile-row"><span class="profile-label">${label}</span>${items.map((i) =>
-    `<a class="ent ent-${t}" href="${linkTo[t](i.key)}">${escapeHtml(text(i))}<span class="profile-n">${Number(i.n)}</span></a>`).join('')}</p>` : '');
+    `<a class="ent ent-${t}" href="${linkTo[t](i.key)}${withPath(subject)}">${escapeHtml(text(i))}<span class="profile-n">${Number(i.n)}</span></a>`).join('')}</p>` : '');
   const rows = group('People', info.people, 'name', (i) => i.key) + group('Organizations', info.orgs, 'name', (i) => i.key)
     + group('Laws & cases', info.laws, 'law', (i) => i.key) + group('Dates', info.dates, 'date', (i) => formatDate(i.key, i.precision));
   const box = document.createElement('section');
@@ -792,8 +832,8 @@ async function profileHead(subject, title, notes) {
   box.innerHTML = `
     <h2 class="profile-title">${escapeHtml(title)}</h2>
     <p class="profile-facts">${escapeHtml(facts)}</p>
-    ${rows ? `<h3 class="profile-heading">Also named in these passages</h3>
-    <p class="profile-hint">Numbers count shared passages. Appearing together is not evidence of a relationship — read the passages.</p>${rows}` : ''}`;
+    ${rows ? `<details class="profile-more"${folded ? '' : ' open'}><summary class="profile-heading">Also named in these passages</summary>
+    <p class="profile-hint">Numbers count shared passages, which open first. Appearing together is not evidence of a relationship — read the passages.</p>${rows}</details>` : ''}`;
   el.stream.prepend(box);
 }
 

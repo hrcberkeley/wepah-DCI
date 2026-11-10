@@ -233,6 +233,8 @@ The explorer turns every name, law and date in a shown passage into a link to it
 and links it to the row's `entity` / `instrument` / `date` (an acronym such as "PG&E" therefore links
 to Pacific Gas and Electric Company). A page shows how many passages and documents mention the
 subject, the span of their `doc_date`s, and the people, organizations, laws and dates named in the same
-passages, counted by shared passages. The page says that appearing together is not evidence of a
+passages, counted by shared passages. Following one of those (or a link inside a passage on that
+page) opens the next page with the context `…/with/<the page you came from>`: the passages naming
+both come first, under their own heading, each showing the sentence that names the other as well. The page says that appearing together is not evidence of a
 relationship; keep that wording in any adaptation. Every view has an address, so links can be shared
 and the browser's Back button works. Views of one search's results stay unaddressed (they depend on the search).
