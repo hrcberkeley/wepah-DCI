@@ -93,6 +93,10 @@
       <section id="left-pane" class="left-pane" aria-label="Evidence stream">
         <div class="results-head">
           <p id="results-count" class="results-count" hidden></p>
+          <div id="view-filter-row" class="view-filter-row" hidden>
+            <input id="view-filter" type="search" autocomplete="off" spellcheck="false" aria-label="Filter this list" />
+            <span id="view-filter-count" class="view-filter-count" aria-live="polite"></span>
+          </div>
           <div id="view-switch" class="view-switch" role="group" aria-label="Show these results as" hidden>
             <button type="button" class="view-option" data-view="passages" aria-pressed="true">Passages</button>
             <button type="button" class="view-option" data-view="timeline" aria-pressed="false">Timeline</button>

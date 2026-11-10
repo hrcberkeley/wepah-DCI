@@ -123,6 +123,7 @@ async function boot() {
     }
   });
   el.expand.addEventListener('click', () => { setCompact(false); el.input.focus(); });
+  $('view-filter').addEventListener('input', applyFilter);
   $('home-link').addEventListener('click', (e) => { e.preventDefault(); goHome(); });
   $('browse-timeline').addEventListener('click', () => browse('timeline', null));
   $('browse-laws').addEventListener('click', () => browse('laws', null));
@@ -302,6 +303,7 @@ function exactExcerpt(text, query, max = 700) {
 }
 
 function renderStreamLoading() {
+  disableFilter();
   el.count.hidden = true;
   el.stream.innerHTML = Array.from({ length: 3 }, () => `
     <div class="skeleton" aria-hidden="true">
@@ -321,6 +323,7 @@ function renderStreamError() {
 }
 
 function renderEvidenceCards(rows, mode, query) {
+  disableFilter();
   state.passages.clear();
   rows.forEach((r) => state.passages.set(r.passage_id, r));
 
@@ -435,6 +438,37 @@ async function browse(view, passageIds) {
   } finally { state.searching = false; }
 }
 
+/** A filter box over the current list (timeline, laws, names, or one law's or name's passages). */
+function enableFilter(placeholder) {
+  const row = $('view-filter-row');
+  const input = $('view-filter');
+  row.hidden = false;
+  input.value = '';
+  input.placeholder = placeholder;
+  applyFilter();
+}
+
+function disableFilter() { $('view-filter-row').hidden = true; }
+
+function applyFilter() {
+  const words = $('view-filter').value.toLocaleLowerCase().split(/\s+/).filter(Boolean);
+  const entries = [...el.stream.querySelectorAll('.entry')];
+  let shown = 0;
+  for (const e of entries) {
+    const hit = words.every((w) => e.textContent.toLocaleLowerCase().includes(w));
+    e.classList.toggle('filtered-out', !hit);
+    shown += hit;
+  }
+  // A year heading stays only while one of its dates is shown.
+  for (const rule of el.stream.querySelectorAll('.year-rule')) {
+    let next = rule.nextElementSibling;
+    let any = false;
+    while (next && !next.classList.contains('year-rule')) { any ||= !next.classList.contains('filtered-out'); next = next.nextElementSibling; }
+    rule.classList.toggle('filtered-out', !any);
+  }
+  $('view-filter-count').textContent = words.length ? `${shown} of ${entries.length}` : '';
+}
+
 /** Back to the start: the full cover and an empty results column. */
 function goHome() {
   if (state.searching) return;
@@ -442,6 +476,7 @@ function goHome() {
   el.summary.hidden = true;
   el.count.hidden = true;
   setView(null);
+  disableFilter();
   el.stream.innerHTML = '<div class="empty-state"><p class="empty-line">Matching passages will collect here.</p><p class="empty-hint">Search above &mdash; each result opens its original page, with the exact words highlighted.</p></div>';
   setStatus('');
   setCompact(false);
@@ -515,6 +550,7 @@ function renderTimeline(events, scoped) {
       meta: n > 1 ? `Mentioned ${n} times in this document` : '',
     }));
   }
+  enableFilter('Filter by a word, name or year…');
 }
 
 function renderLawIndex(laws, passageIds) {
@@ -541,6 +577,7 @@ function renderLawIndex(laws, passageIds) {
     });
     el.stream.appendChild(item);
   }
+  enableFilter('Filter laws and cases…');
 }
 
 const KIND_LABEL = { person: 'Person', government: 'Government', company: 'Company', court: 'Court', organization: 'Organization' };
@@ -569,6 +606,7 @@ function renderNameIndex(group, names, passageIds) {
     item.addEventListener('click', () => showMentions(group, n.entity, passageIds));
     el.stream.appendChild(item);
   }
+  enableFilter(group === 'people' ? 'Filter people…' : 'Filter organizations…');
 }
 
 async function showMentions(group, entity, passageIds) {
@@ -588,6 +626,7 @@ async function showMentions(group, entity, passageIds) {
         quoteHtml: highlightExactPhrase(row.sentence, row.mention_text),
       }));
     }
+    enableFilter('Filter these passages…');
   } catch (err) {
     console.error(err);
     renderStreamError();
@@ -612,6 +651,7 @@ async function showCitations(instrument, provision, passageIds) {
         quoteHtml: highlightExactPhrase(row.sentence, row.cite_text),
       }));
     }
+    enableFilter('Filter these passages…');
   } catch (err) {
     console.error(err);
     renderStreamError();
