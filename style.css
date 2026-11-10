@@ -218,7 +218,9 @@ body.compact .masthead-kicker { display: none; }
 .dossier-form-row button { border: 0; background: var(--ink); color: var(--plate); padding: 9px 15px; font: 600 13px/1.4 var(--font-ui); cursor: pointer; }
 .dossier-panel-note, .dossier-error { margin: 12px 0 0; font: 15px/1.45 var(--font-serif); color: var(--ink-2); }
 .dossier-error { color: var(--gold-ink); }
-.dossier-default { margin-top: 15px; border: 0; border-bottom: 1px solid var(--line-strong); padding: 0 0 2px; background: transparent; color: var(--ink-2); font: 500 12px/1.4 var(--font-mono); cursor: pointer; }
+.dossier-defaults { display: flex; flex-wrap: wrap; gap: 10px 18px; margin-top: 15px; }
+.dossier-default { border: 0; border-bottom: 1px solid var(--line-strong); padding: 0 0 2px; background: transparent; color: var(--ink-2); font: 500 12px/1.4 var(--font-mono); cursor: pointer; }
+.dossier-default:hover { color: var(--ink); border-color: var(--gold-deep); }
 
 .search-field {
   width: 100%;

@@ -58,7 +58,10 @@
             </form>
             <p id="dossier-error" class="dossier-error" role="alert" hidden></p>
             <p class="dossier-panel-note">Use a public dataset prepared for WeHPAH.</p>
-            <button id="dossier-default" class="dossier-default" type="button">Return to Microsoft Datacenter Dossier</button>
+            <div class="dossier-defaults" aria-label="Available dossiers">
+              <button class="dossier-default" type="button" data-repo="kolenyo/MS_Datacenter">Microsoft Datacenter Dossier</button>
+              <button class="dossier-default" type="button" data-repo="kolenyo/great_oaks">Great Oaks Dossier</button>
+            </div>
           </div>
 
           <!-- Lives outside the collapsible footnotes so mode 3 stays labeled
