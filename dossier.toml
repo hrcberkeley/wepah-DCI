@@ -5,6 +5,8 @@ pdfs = "raw_pdfs"
 output = "dist_data"
 cache = "ingestion/.cache"
 publish_to = "kolenyo/MS_Datacenter"
+# Language, jurisdiction and domain rules (ingestion/profiles/us-california.toml; see docs/PROFILES.md)
+profile = "us-california"
 
 # California Energy Commission docket names: TN230528_20191107T132749_Memo to Open New Docket.pdf
 [filenames]

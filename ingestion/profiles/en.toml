@@ -1,0 +1,94 @@
+# English (general) — the base profile.
+#
+# A profile holds everything the pipeline needs to know about a dossier's LANGUAGE,
+# JURISDICTION and DOMAIN: date order, which citations are laws, which words are titles,
+# roles or job descriptions, and the examples the name judge is shown. The pipeline's
+# steps themselves are general and live in the code (see docs/PIPELINE.md and docs/PROFILES.md).
+#
+# Another profile can start from this one with  extends = "en"  and replace any key.
+# A key that is set replaces the inherited value entirely (lists are not merged), so a
+# profile always says exactly what it uses.
+#
+# Values marked (regex) are regular-expression fragments; everything else is literal text.
+
+name = "English (general)"
+
+[dates]
+# How to read numeric dates like 3/4/2021: "mdy" (US), "dmy" (UK, most of the world),
+# or "none" to skip them. Written-out dates ("4 March 2021", "March 4, 2021") and ISO
+# dates (2021-03-04) are always read. Bare years and relative dates are never converted.
+numeric_order = "none"
+months = ["January", "February", "March", "April", "May", "June", "July", "August",
+          "September", "October", "November", "December"]
+# Extra abbreviations beyond the first three letters, as  abbreviation = month number
+month_abbreviations = { Sept = 9 }
+
+[laws]
+# Read court case citations with eyecite (US reporters only).
+eyecite_cases = false
+# Words that make one law different from another with the same short name
+# ("California Endangered Species Act" vs "Endangered Species Act"); never dropped when
+# shortening a law's name. Lowercase.
+jurisdiction_words = ["state", "federal", "national"]
+# (regex) What introduces a section number: "Section 12", "§ 12", "Part 12".
+section_marker = '(?:[Ss]ections?|SECTION|[Ss]ec\.|§§?|[Pp]art)'
+# An Act's acronym followed by one of these words names a different instrument ("CEQA Guidelines").
+acronym_not_before = ["Guidelines"]
+# Law patterns: see us-california.toml for the format. The general profile only finds
+# named Acts ("Clean Air Act") and their defined acronyms, which is built into the code.
+patterns = []
+
+[laws.code_names]
+# Named codes and their abbreviations, used by a pattern's {CODE_NAMES} placeholder.
+
+[names]
+# (regex) Titles before a person's name. Removed from the name; a titled name is a strong signal.
+titles = ['Mr\.', 'Ms\.', 'Mrs\.', 'Dr\.', 'Hon\.', 'Honorable', 'Professor', 'Judge', 'Justice',
+          'Chair(?:man|woman|person)?', 'Vice Chair', 'President', 'Secretary', 'Chief', 'Deputy',
+          'Governor', 'Senator', 'Mayor', 'Attorney']
+# (regex) Last words of organization names ("... Commission", "... Inc.").
+organization_endings = ['Commission', 'Department', 'District', 'Agency', 'Board', 'Council', 'Authority',
+          'Company', 'Corporation', 'Corp\.', 'Inc\.', 'Incorporated', 'LLC', 'L\.L\.C\.', 'LP', 'L\.P\.', 'LLP',
+          'Ltd\.?', 'Association', 'Coalition', 'Society', 'Institute', 'University', 'College', 'Court', 'Office',
+          'Bureau', 'Service', 'Division', 'Committee', 'Foundation', 'Club', 'Alliance', 'Partners', 'Utilities',
+          'Unions?', 'Network', 'Center', 'Laboratory', 'Group', 'Associates', 'Trust', 'Conservancy', 'Federation']
+# "City of X", "County of X": government bodies named after a place.
+place_governments = ["City", "County", "State", "Town", "Port"]
+# Legal-form endings ignored when matching names ("Acme Inc." = "Acme"). Lowercase, punctuation removed.
+legal_suffixes = ["inc", "incorporated", "llc", "l l c", "lp", "l p", "llp", "corp", "corporation", "co", "company", "ltd"]
+# Words that join parts of a name ("Department of Water Resources", "Bay and Delta").
+connectors = ["of", "and", "for", "on", "the", "to", "in", "at", "by", "&"]
+# Words that end a person's name in a signature block ("Jane Doe, Senior Planner, ...").
+job_words = ["senior", "planner", "manager", "director", "engineer", "counsel", "attorney", "officer", "staff",
+             "specialist", "analyst", "associate", "principal", "project", "member", "chair", "president",
+             "secretary", "assistant", "supervisor", "advisor", "adviser", "scientist", "consultant",
+             "coordinator", "executive", "general", "deputy", "chief", "vice", "esq", "phd", "ph.d", "p.e"]
+# Words and phrases that are roles, not names, when they stand alone. Lowercase.
+role_words = ["staff", "commission", "committee", "court", "the court", "counsel", "city", "county", "state",
+              "district", "agency", "department", "board", "public", "parties", "the parties",
+              "the city", "the county", "the state", "the commission", "the committee", "project", "the project",
+              "plaintiff", "defendant", "petitioner", "respondent", "claimant", "applicant", "the applicant"]
+# Roles a document can define for a party: Acme Corp. ("Plaintiff"). Shown as "the plaintiff".
+defined_roles = ["Plaintiff", "Defendant", "Petitioner", "Respondent", "Claimant", "Applicant", "Appellant", "Appellee"]
+# (regex) Prefixes that, with only an organization ending after them, are not a name on their
+# own ("State Department", "Regional Board"); such fragments are dropped.
+generic_fragment_prefixes = ['State', 'Federal', 'National', 'Regional', 'County', 'City']
+# Spelling rules applied when matching names, as [regex, replacement] on the lowercased,
+# punctuation-free name.
+name_aliases = []
+
+[names.structure]
+# Lines that name the author, recipient or signer of a letter or filing.
+from_labels = ["From", "FROM"]
+to_labels = ["To", "TO"]
+salutations = ["Dear"]
+sign_offs = ["/s/", "Sincerely,", "Respectfully submitted,", "Respectfully,", "Best regards,", "Regards,"]
+authored_by = ["Submitted", "Prepared", "Filed", "Signed"]
+
+[names.judge]
+# Examples shown to the name judge (a local language model). Tune these to the dossier's
+# subject: list what is often mistaken for an organization in your documents.
+role_examples = '"the Applicant", "staff", "the Court"'
+generic_group_examples = '"City Council" without a city'
+not_names = ["places", "regions", "facilities", "projects", "sites", "buildings", "plans", "programs", "studies",
+             "assessments", "documents", "tables", "species and laws"]

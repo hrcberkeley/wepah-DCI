@@ -16,6 +16,8 @@ This opens the **WeHPAH! Studio**, a local page that sets the dossier's title, s
 
 The builder keeps the existing release until a replacement passes its checks, and reuses earlier work for unchanged PDFs and passages. The output is `dist_data/` with `dossier.json`, `corpus.parquet`, per-cluster files in `clusters/`, `centroids.json`, `events.parquet` (dates), `authorities.parquet` (laws and cases), `names.parquet` (people and organizations), and `pdfs/`. How each stage works and why is in [docs/PIPELINE.md](docs/PIPELINE.md).
 
+**Using it for another document collection:** follow [docs/WORKFLOW.md](docs/WORKFLOW.md). Language-, jurisdiction- and subject-specific rules live in a profile ([docs/PROFILES.md](docs/PROFILES.md)); this dossier uses `us-california`. Coding agents (Claude Code, Codex) find the same workflow through [AGENTS.md](AGENTS.md).
+
 ## Run the site locally
 
 ```sh

@@ -1,0 +1,129 @@
+# United States — California, administrative proceedings (energy facility siting).
+#
+# Built for the Microsoft Datacenter dossier (California Energy Commission docket 19-SPPE-04).
+# Starts from the general English profile and replaces the keys below. Every value here was
+# added because a measurement on that dossier needed it; docs/PIPELINE.md records why.
+
+extends = "en"
+name = "US — California administrative proceedings"
+
+[dates]
+numeric_order = "mdy"
+months = ["January", "February", "March", "April", "May", "June", "July", "August",
+          "September", "October", "November", "December"]
+month_abbreviations = { Sept = 9 }
+
+[laws]
+eyecite_cases = true
+# Keeps "California Endangered Species Act" apart from the federal "Endangered Species Act".
+jurisdiction_words = ["california", "state", "cal"]
+# "CEQA Guidelines" is a separate instrument from the Act "CEQA".
+acronym_not_before = ["Guidelines"]
+
+# Each pattern: regex (with placeholders {SEC} = section marker, {PROV} = a section number
+# group, {CODE_NAMES} = a group matching any name in [laws.code_names]); instrument = the
+# law's name, where {1}, {2} … insert a regex group and {code} the matched code's full name;
+# provision_group = which group holds the section number (0 = none); ignore_case.
+# Order matters: earlier patterns claim their text first.
+
+[[laws.patterns]]
+regex = '\b(\d{1,2})\s+U\.?\s?S\.?\s?C\.?(?:\s?A\.?)?\s*(?:{SEC}\s*)?{PROV}'
+instrument = "{1} U.S.C."
+provision_group = 2
+
+[[laws.patterns]]
+regex = '\b(\d{1,2})\s+C\.?\s?F\.?\s?R\.?\s*(?:{SEC}\s*)?{PROV}'
+instrument = "{1} C.F.R."
+provision_group = 2
+
+[[laws.patterns]]
+regex = '\b(\d{1,2})\s+(?:Cal\.?\s*Code\s*(?:of\s+)?Regs?\.?|CCR)\s*,?\s*(?:{SEC}\s*)?{PROV}'
+instrument = "Cal. Code Regs., tit. {1}"
+provision_group = 2
+
+[[laws.patterns]]
+regex = 'California\s+Code\s+of\s+Regulations,?\s+[Tt]itle\s+(\d{1,2}),?\s*(?:{SEC}\s*{PROV})?'
+instrument = "Cal. Code Regs., tit. {1}"
+provision_group = 2
+
+[[laws.patterns]]
+regex = '[Tt]itle\s+(\d{1,2})\s+of\s+the\s+California\s+Code\s+of\s+Regulations(?:,?\s*{SEC}\s*{PROV})?'
+instrument = "Cal. Code Regs., tit. {1}"
+provision_group = 2
+
+[[laws.patterns]]
+regex = '(?:(?:State\s+)?CEQA\s+Guidelines|Guidelines\s+for\s+Implementation\s+of\s+the\s+California\s+Environmental\s+Quality\s+Act)(?:,?\s*{SEC}\s*{PROV})?'
+instrument = "CEQA Guidelines"
+provision_group = 1
+
+[[laws.patterns]]
+regex = '(?:(?:California|Cal\.)\s+)?({CODE_NAMES})\s+Code(?:,?\s*{SEC}\s*{PROV})?'
+instrument = "California {code} Code"
+code_group = 1
+provision_group = 2
+ignore_case = true
+
+[[laws.patterns]]
+regex = '\b((?:[A-Z][a-zé]+\s+){1,3})Municipal\s+Code(?:,?\s*{SEC}\s*{PROV})?'
+instrument = "{1} Municipal Code"
+provision_group = 2
+
+[laws.code_names]
+# California code names and the abbreviations filings use for them (lowercase).
+"public resources" = ["pub. res.", "pub. resources"]
+"government" = ["gov.", "govt."]
+"health and safety" = ["health & saf.", "health & safety", "health and saf."]
+"water" = ["wat."]
+"fish and game" = ["fish & game", "fish & g."]
+"civil" = ["civ."]
+"penal" = ["pen."]
+"labor" = ["lab."]
+"business and professions" = ["bus. & prof."]
+"vehicle" = ["veh."]
+"evidence" = ["evid."]
+"public utilities" = ["pub. util.", "pub. utilities"]
+"revenue and taxation" = ["rev. & tax."]
+"food and agricultural" = ["food & agric."]
+"streets and highways" = ["sts. & high."]
+"education" = ["educ."]
+"elections" = ["elec."]
+"insurance" = ["ins."]
+"harbors and navigation" = ["harb. & nav."]
+
+[names]
+# US political and California Energy Commission hearing titles, plus the general ones.
+titles = ['Commissioners?', 'Governor', 'Lieutenant Governor', 'President', 'Secretary', 'Chief', 'Deputy',
+          'Chair(?:man|woman|person)?', 'Vice Chair', 'Presiding Member', 'Associate Member', 'Hearing Officer',
+          'Mr\.', 'Ms\.', 'Mrs\.', 'Dr\.', 'Hon\.', 'Honorable', 'Senator', 'Assemblymember', 'Assembly Member',
+          'Councilmember', 'Council Member', 'Mayor', 'Supervisor', 'Intervenor', 'Attorney', 'Professor',
+          'Judge', 'Justice']
+organization_endings = ['Commission', 'Department', 'District', 'Agency', 'Board', 'Council', 'Authority',
+          'Company', 'Corporation', 'Corp\.', 'Inc\.', 'Incorporated', 'LLC', 'L\.L\.C\.', 'LP', 'L\.P\.', 'LLP',
+          'Association', 'Coalition', 'Society', 'Institute', 'University', 'College', 'Court', 'Office', 'Bureau',
+          'Service', 'Division', 'Committee', 'Foundation', 'Club', 'Alliance', 'Partners', 'Utilities', 'Unions?',
+          'Network', 'Center', 'Laboratory', 'Group', 'Associates', 'Trust', 'Conservancy', 'Federation', 'Council']
+job_words = ["senior", "planner", "manager", "director", "engineer", "environmental", "counsel", "attorney",
+             "officer", "staff", "specialist", "analyst", "associate", "principal", "project", "presiding",
+             "commissioner", "member", "chair", "president", "secretary", "assistant", "supervisor", "advisor",
+             "adviser", "scientist", "consultant", "coordinator", "executive", "general", "deputy", "chief", "vice",
+             "esq", "phd", "ph.d", "p.e"]
+# Energy Commission proceeding vocabulary: parties, offices and staff roles that are not names.
+role_words = ["applicant", "staff", "commission", "committee", "intervenor", "intervenors", "petitioner",
+              "project owner", "owner", "hearing officer", "presiding member", "associate member", "the city",
+              "the county", "the state", "city", "county", "state", "district", "agency", "department", "board",
+              "court", "the court", "counsel", "respondent", "complainant", "commenter", "public",
+              "energy commission", "energy commission staff", "cec staff", "the applicant", "the commission",
+              "the committee", "lead agency", "responsible agency", "trustee agency", "the project", "project",
+              "cpm", "compliance project manager", "parties", "the parties", "docket unit", "public adviser",
+              "public advisor"]
+defined_roles = ["Applicant", "Project Owner", "Owner", "Petitioner", "Intervenor", "Respondent", "Complainant", "Commenter"]
+generic_fragment_prefixes = ['California', 'State', 'U\.S\.', 'US', 'Federal', 'Regional', 'County', 'City', 'Air', 'Water']
+# "CA Energy Commission" = "California Energy Commission"; "United States" = "U.S."
+name_aliases = [['^ca ', 'california '], ['\b(?:united states|u s)\b', 'us']]
+
+[names.judge]
+role_examples = '"the Applicant", "staff", "Hearing Officer"'
+generic_group_examples = '"City Council" without a city'
+# Energy-siting documents name many facilities that look like organizations.
+not_names = ["places", "regions", "air basins", "facilities", "power plants", "data centers", "projects", "sites",
+             "buildings", "plans", "programs", "studies", "assessments", "documents", "tables", "species and laws"]

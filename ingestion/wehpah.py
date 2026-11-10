@@ -7,6 +7,7 @@
     ./wehpah preview         open the explorer on the local release
     ./wehpah login           sign in to Hugging Face (token stays in your user folder)
     ./wehpah publish         upload the checked release to Hugging Face
+    ./wehpah eval …          measure quality: names | judge <models> | sample | add-labels
 
 Settings live in dossier.toml next to your PDFs (see INGESTION.md). Only `title` is required.
 """
@@ -24,7 +25,7 @@ from pathlib import Path
 
 CONFIG_NAME = "dossier.toml"
 REPO_RE = re.compile(r"^[A-Za-z0-9][\w.-]*/[A-Za-z0-9][\w.-]*$")
-TOP_KEYS = {"title", "description", "pdfs", "output", "cache", "publish_to"}
+TOP_KEYS = {"title", "description", "pdfs", "output", "cache", "publish_to", "profile"}
 SECTIONS = {"filenames": {"title", "date"}, "advanced": {"workers", "full_page_ocr"},
             "names": {"enabled", "judge", "finder"}}
 
@@ -35,6 +36,7 @@ description = {description}
 # output = "dist_data"         # where the finished release is written
 # cache = ".wehpah-cache"      # saved work, so rebuilds only read new or changed PDFs
 # publish_to = "owner/name"    # Hugging Face dataset used by `wehpah publish`
+# profile = "en"               # language/jurisdiction rules: a name in ingestion/profiles/ or a .toml path (docs/PROFILES.md)
 
 # [filenames]                  # optional patterns over the file name; the first group is used
 # title = '^TN\\d+_\\d{{8}}T\\d{{6}}_(.+)$'
@@ -67,6 +69,7 @@ class Settings:
     names_enabled: bool = True
     names_judge: str = ""
     names_finder: str = ""
+    profile: dict | None = None
 
 
 def _pattern(value, name):
@@ -109,6 +112,8 @@ def load_settings(root: Path) -> Settings:
     judge = str(names_cfg.get("judge", ""))
     if judge and not re.match(r"^(mlx|lmstudio|ollama):\S+$", judge):
         raise ValueError('[names] judge must look like "mlx:<model>", "lmstudio:<model>" or "ollama:<model>"')
+    from dossier_profile import DEFAULT_PROFILE, load_profile
+    profile = load_profile(str(data.get("profile") or DEFAULT_PROFILE), root)
     default_pdfs = "raw_pdfs" if (root / "raw_pdfs").is_dir() else "."
     resolve = lambda key, default: (root / Path(str(data.get(key) or default)).expanduser()).resolve()
     pdfs, output = resolve("pdfs", default_pdfs), resolve("output", "dist_data")
@@ -121,7 +126,7 @@ def load_settings(root: Path) -> Settings:
                     title_re=_pattern(names.get("title"), "title"), date_re=_pattern(names.get("date"), "date"),
                     workers=workers, full_page_ocr=full_page_ocr,
                     names_enabled=names_cfg.get("enabled", True), names_judge=judge,
-                    names_finder=str(names_cfg.get("finder", "")))
+                    names_finder=str(names_cfg.get("finder", "")), profile=profile)
 
 
 def save_settings(root: Path, **values: str) -> None:
@@ -229,6 +234,11 @@ def main(argv: list[str] | None = None) -> None:
     p = sub.add_parser("publish", help="upload the release to Hugging Face")
     p.add_argument("--to", default="", help="owner/name (default: publish_to in dossier.toml)")
     p.add_argument("--yes", action="store_true", help="do not ask for confirmation")
+    e = sub.add_parser("eval", help="measure quality (see docs/WORKFLOW.md)")
+    e.add_argument("what", choices=["names", "judge", "sample", "add-labels"],
+                   help="names: precision/recall · judge: compare models · sample: passages to label · add-labels: keep them")
+    e.add_argument("models", nargs="*", help="for `judge`: model specs such as mlx:<repo> lmstudio:<model> ollama:<model>")
+    e.add_argument("--n", type=int, default=30, help="for `sample`: how many passages")
     args = ap.parse_args(argv)
 
     root = Path(args.dir).resolve()
@@ -248,8 +258,20 @@ def main(argv: list[str] | None = None) -> None:
         elif command == "check":
             build_corpus.verify_corpus(settings.output)
         elif command == "login":
-            from huggingface_hub import login
-            login()
+            # Always ask: a token saved earlier may be read-only, and publishing needs a write token.
+            from huggingface_hub import interpreter_login
+            interpreter_login(skip_if_logged_in=False)
+        elif command == "eval":
+            import evaluate
+            if args.what == "names":
+                evaluate.eval_names(settings)
+            elif args.what == "judge":
+                import names
+                evaluate.eval_judge(settings, args.models or [settings.names_judge or names.JUDGE_DEFAULT])
+            elif args.what == "sample":
+                evaluate.sample(settings, args.n)
+            else:
+                evaluate.add_labels(settings)
         elif command == "publish":
             publish(settings, args.to, args.yes)
         else:

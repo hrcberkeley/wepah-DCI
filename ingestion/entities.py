@@ -7,10 +7,13 @@ the browser's verification gate accepts them without any model involved.
   events.parquet       one row per date mention, sorted by date
   authorities.parquet  one row per citation of a statute, regulation, act, code or case
 
-Dates: US conventions (numeric dates are month/day/year). Bare years and relative
-dates ("two weeks later") are not converted. Authorities: federal (U.S.C., C.F.R.),
-California codes and regulations, CEQA Guidelines, named Acts (with their defined
-acronyms), municipal codes, and court cases (via eyecite).
+General rules live here; everything specific to a language, jurisdiction or domain (numeric
+date order, month names, which citations are laws, which words mark a jurisdiction) comes from
+the dossier's profile — see dossier_profile.py and docs/PROFILES.md. Call configure(profile)
+before using the finders; extract() does it for you.
+
+Always: written-out and ISO dates; named Acts and the acronyms documents define for them;
+"Section 12 of the …" pulled in from either side. Never: bare years, relative dates.
 """
 
 from __future__ import annotations
@@ -19,22 +22,73 @@ import datetime as dt
 import re
 import unicodedata
 
-MONTHS = {m: i for i, m in enumerate(["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"], 1)}
-MONTH_RE = r"(Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|June?|July?|Aug(?:ust)?|Sept?(?:ember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)"
 YEAR = r"((?:19|20)\d{2})"
+PROV = r"(\d+[A-Za-z]?(?:[.\-]\d+[A-Za-z]?)*(?:\([A-Za-z0-9]{1,4}\))*)"
 
-# Order matters: longer forms first; a span claimed by one pattern is not reused.
-DATE_PATTERNS = [
-    ("mdy", re.compile(rf"\b{MONTH_RE}\.?\s+(\d{{1,2}})(?:st|nd|rd|th)?,?\s*{YEAR}\b", re.I)),
-    ("dmy", re.compile(rf"\b(\d{{1,2}})(?:st|nd|rd|th)?\s+(?:day\s+of\s+)?{MONTH_RE}\.?,?\s+{YEAR}\b", re.I)),
-    ("iso", re.compile(r"\b((?:19|20)\d{2})-(\d{2})-(\d{2})\b")),
-    ("num", re.compile(r"(?<![\d/.])(\d{1,2})/(\d{1,2})/((?:19|20)\d{2})(?![\d/])")),
-    ("my", re.compile(rf"\b{MONTH_RE}\.?,?\s+{YEAR}\b", re.I)),
-]
+# Set by configure(profile):
+MONTHS: dict[str, int] = {}
+DATE_PATTERNS: list = []
+NUMERIC_ORDER = "none"
+SEC = ""
+LAW_PATTERNS: list = []
+CODE_ALT: dict[str, str] = {}
+KEEP_PREFIX: set[str] = set()
+ACRONYM_NOT_BEFORE = ""
+EYECITE = False
+LOOKBACK_RE = FORWARD_RE = None
+PROFILE_ID = ""
+
+
+def configure(profile: dict) -> None:
+    """Build the date and law finders from a profile (see dossier_profile.py)."""
+    global MONTHS, DATE_PATTERNS, NUMERIC_ORDER, SEC, LAW_PATTERNS, CODE_ALT, KEEP_PREFIX
+    global ACRONYM_NOT_BEFORE, EYECITE, LOOKBACK_RE, FORWARD_RE, PROFILE_ID
+    # ponytail: module-level settings, one profile per process; pass a config object if builds ever mix profiles.
+    PROFILE_ID = profile.get("id", "")
+    d, laws = profile["dates"], profile["laws"]
+    names = d["months"]
+    MONTHS = {m.lower()[:3]: i for i, m in enumerate(names, 1)}
+    MONTHS.update({a.lower(): n for a, n in d.get("month_abbreviations", {}).items()})
+    alts = [re.escape(m[:3]) + (f"(?:{re.escape(m[3:])})?" if len(m) > 3 else "") for m in names]
+    alts += [re.escape(a) for a in d.get("month_abbreviations", {})]
+    month_re = "(" + "|".join(alts) + ")"
+    NUMERIC_ORDER = d.get("numeric_order", "none")
+    # Order matters: longer forms first; a span claimed by one pattern is not reused.
+    DATE_PATTERNS = [
+        ("mdy", re.compile(rf"\b{month_re}\.?\s+(\d{{1,2}})(?:st|nd|rd|th)?,?\s*{YEAR}\b", re.I)),
+        ("dmy", re.compile(rf"\b(\d{{1,2}})(?:st|nd|rd|th)?\s+(?:day\s+of\s+)?{month_re}\.?,?\s+{YEAR}\b", re.I)),
+        ("iso", re.compile(r"\b((?:19|20)\d{2})-(\d{2})-(\d{2})\b")),
+        ("num", re.compile(r"(?<![\d/.])(\d{1,2})/(\d{1,2})/((?:19|20)\d{2})(?![\d/])")),
+        ("my", re.compile(rf"\b{month_re}\.?,?\s+{YEAR}\b", re.I)),
+    ]
+    if NUMERIC_ORDER == "none":
+        DATE_PATTERNS = [p for p in DATE_PATTERNS if p[0] != "num"]
+    SEC = laws["section_marker"]
+    CODE_ALT = {alt: full for full, alts in laws.get("code_names", {}).items() for alt in [full, *alts]}
+    code_names = "|".join(sorted((re.escape(a).replace(r"\ ", r"\s+") for a in CODE_ALT), key=len, reverse=True))
+    LAW_PATTERNS = []
+    for spec in laws.get("patterns", []):
+        regex = spec["regex"].replace("{SEC}", SEC).replace("{PROV}", PROV).replace("{CODE_NAMES}", code_names)
+        LAW_PATTERNS.append((re.compile(regex, re.I if spec.get("ignore_case") else 0), spec))
+    KEEP_PREFIX = set(laws.get("jurisdiction_words", []))
+    words = laws.get("acronym_not_before", [])
+    ACRONYM_NOT_BEFORE = rf"(?!\s+(?:{'|'.join(map(re.escape, words))}))" if words else ""
+    EYECITE = bool(laws.get("eyecite_cases"))
+    LOOKBACK_RE = re.compile(rf"{SEC}\s*{PROV}\s+of\s+(?:the\s+)?$")
+    FORWARD_RE = re.compile(rf"^,?\s*{SEC}\s*{PROV}")
+
+
+def _instrument(spec: dict, m: re.Match) -> str:
+    """A pattern's instrument template: {1} = regex group 1, {code} = the matched code's full name."""
+    name = spec["instrument"]
+    if "{code}" in name:
+        full = CODE_ALT[re.sub(r"\s+", " ", m.group(spec["code_group"]).lower())]
+        name = name.replace("{code}", full.title().replace(" And ", " and "))
+    return re.sub(r"\{(\d+)\}", lambda g: (m.group(int(g.group(1))) or "").strip(), name)
 
 
 def _month(name: str) -> int:
-    return MONTHS[name.lower()[:3]]
+    return MONTHS.get(name.lower()) or MONTHS[name.lower()[:3]]
 
 
 def find_dates(line: str) -> list[tuple[int, int, str, str]]:
@@ -53,7 +107,7 @@ def find_dates(line: str) -> list[tuple[int, int, str, str]]:
                 elif kind == "iso":
                     y, mo, d = int(g[0]), int(g[1]), int(g[2])
                 elif kind == "num":
-                    y, mo, d = int(g[2]), int(g[0]), int(g[1])
+                    y, mo, d = (int(g[2]), int(g[0]), int(g[1])) if NUMERIC_ORDER == "mdy" else (int(g[2]), int(g[1]), int(g[0]))
                 else:
                     y, mo, d = int(g[1]), _month(g[0]), 0
                 if d:
@@ -74,47 +128,10 @@ def find_dates(line: str) -> list[tuple[int, int, str, str]]:
 # Authorities
 # ---------------------------------------------------------------------------
 
-PROV = r"(\d+[A-Za-z]?(?:[.\-]\d+[A-Za-z]?)*(?:\([A-Za-z0-9]{1,4}\))*)"
-SEC = r"(?:[Ss]ections?|SECTION|[Ss]ec\.|§§?|[Pp]art)"
-
-CA_CODES = {
-    "public resources": ["pub. res.", "pub. resources"], "government": ["gov.", "govt."],
-    "health and safety": ["health & saf.", "health & safety", "health and saf."], "water": ["wat."],
-    "fish and game": ["fish & game", "fish & g."], "civil": ["civ."], "penal": ["pen."], "labor": ["lab."],
-    "business and professions": ["bus. & prof."], "vehicle": ["veh."], "evidence": ["evid."],
-    "public utilities": ["pub. util.", "pub. utilities"], "revenue and taxation": ["rev. & tax."],
-    "food and agricultural": ["food & agric."], "streets and highways": ["sts. & high."],
-    "education": ["educ."], "elections": ["elec."], "insurance": ["ins."], "harbors and navigation": ["harb. & nav."],
-}
-_CA_ALT = {alt: full for full, alts in CA_CODES.items() for alt in [full, *alts]}
-_CA_NAMES = "|".join(sorted((re.escape(a).replace(r"\ ", r"\s+") for a in _CA_ALT), key=len, reverse=True))
-
-# (pattern, instrument builder, provision group or None)
-LAW_PATTERNS = [
-    (re.compile(rf"\b(\d{{1,2}})\s+U\.?\s?S\.?\s?C\.?(?:\s?A\.?)?\s*(?:{SEC}\s*)?{PROV}"),
-     lambda g: f"{g[0]} U.S.C.", 1),
-    (re.compile(rf"\b(\d{{1,2}})\s+C\.?\s?F\.?\s?R\.?\s*(?:{SEC}\s*)?{PROV}"),
-     lambda g: f"{g[0]} C.F.R.", 1),
-    (re.compile(rf"\b(\d{{1,2}})\s+(?:Cal\.?\s*Code\s*(?:of\s+)?Regs?\.?|CCR)\s*,?\s*(?:{SEC}\s*)?{PROV}"),
-     lambda g: f"Cal. Code Regs., tit. {g[0]}", 1),
-    (re.compile(rf"California\s+Code\s+of\s+Regulations,?\s+[Tt]itle\s+(\d{{1,2}}),?\s*(?:{SEC}\s*{PROV})?"),
-     lambda g: f"Cal. Code Regs., tit. {g[0]}", 1),
-    (re.compile(rf"[Tt]itle\s+(\d{{1,2}})\s+of\s+the\s+California\s+Code\s+of\s+Regulations(?:,?\s*{SEC}\s*{PROV})?"),
-     lambda g: f"Cal. Code Regs., tit. {g[0]}", 1),
-    (re.compile(rf"(?:(?:State\s+)?CEQA\s+Guidelines|Guidelines\s+for\s+Implementation\s+of\s+the\s+California\s+Environmental\s+Quality\s+Act)(?:,?\s*{SEC}\s*{PROV})?"),
-     lambda g: "CEQA Guidelines", 0),
-    (re.compile(rf"(?:(?:California|Cal\.)\s+)?({_CA_NAMES})\s+Code(?:,?\s*{SEC}\s*{PROV})?", re.I),
-     lambda g: f"California {_CA_ALT[re.sub(r'\s+', ' ', g[0].lower())].title().replace(' And ', ' and ')} Code", 1),
-    (re.compile(rf"\b((?:[A-Z][a-zé]+\s+){{1,3}})Municipal\s+Code(?:,?\s*{SEC}\s*{PROV})?"),
-     lambda g: f"{g[0].strip()} Municipal Code", 1),
-]
-
 ACT_LEAD = {"the", "this", "that", "under", "pursuant", "per", "see", "and", "of", "in", "to", "by", "with",
             "for", "as", "a", "an", "such", "said", "its", "their", "our", "any", "each", "if", "when", "where"}
 ACT_RE = re.compile(r"\b((?:[A-Z][A-Za-z'’\-]*\s+(?:(?:of|and|for|on|the|to|in|with)\s+)*){1,8}(?:Act|ACT))\b(?:\s+of\s+((?:19|20)\d{2}))?")
 ACRONYM_RE = re.compile(r"\s*\(\s*[\"“]?([A-Z][A-Za-z]{1,9})[\"”]?\s*\)")
-LOOKBACK_RE = re.compile(rf"{SEC}\s*{PROV}\s+of\s+(?:the\s+)?$")
-FORWARD_RE = re.compile(rf"^,?\s*{SEC}\s*{PROV}")
 
 
 def _act_name(text: str) -> str:
@@ -166,19 +183,21 @@ def find_authorities(line: str, aliases: dict[str, str]) -> list[tuple[int, int,
         taken.append((s, e))
         found.append((s, e, instrument, provision.rstrip(".")))
 
-    for pattern, instrument, pgroup in LAW_PATTERNS:
+    for pattern, spec in LAW_PATTERNS:
         for m in pattern.finditer(line):
-            g = m.groups()
-            claim(m.start(), m.end(), instrument(g), (g[pgroup] if pgroup is not None and pgroup < len(g) else None) or "")
+            pg = spec.get("provision_group", 0)
+            claim(m.start(), m.end(), _instrument(spec, m), (m.group(pg) if pg else None) or "")
     for m in ACT_RE.finditer(line):
         name = _act_name(m.group(1))
         if name:
             lead = m.group(1).find(name.split()[0]) if not m.group(1).isupper() else len(m.group(1)) - len(m.group(1).lstrip())
             claim(m.start(1) + max(0, lead), m.end(), name + (f" of {m.group(2)}" if m.group(2) else ""), "")
     for acronym, name in aliases.items():
-        for m in re.finditer(rf"\b{re.escape(acronym)}\b(?!\s+Guidelines)", line):
+        for m in re.finditer(rf"\b{re.escape(acronym)}\b{ACRONYM_NOT_BEFORE}", line):
             claim(m.start(), m.end(), name, "")
     try:
+        if not EYECITE:
+            raise ImportError
         from eyecite import get_citations
         from eyecite.models import FullCaseCitation
         for c in get_citations(line):
@@ -230,8 +249,9 @@ def passage_lines(text: str) -> list[str]:
 ROW_KEYS = ("passage_id", "doc_id", "doc_title", "page_number", "bbox_x_pct", "bbox_y_pct", "bbox_w_pct", "bbox_h_pct")
 
 
-def extract(rows: list[dict]) -> tuple[list[dict], list[dict]]:
+def extract(rows: list[dict], profile: dict) -> tuple[list[dict], list[dict]]:
     """(events, authorities) for corpus rows; figure placeholders are skipped."""
+    configure(profile)
     aliases = act_aliases(line for r in rows for line in passage_lines(r["passage_text"]))
     events, authorities = [], []
     for r in rows:
@@ -246,9 +266,6 @@ def extract(rows: list[dict]) -> tuple[list[dict], list[dict]]:
                 authorities.append({**base, "instrument": instrument, "provision": provision,
                                     "cite_text": line[s:e], "sentence": sentence_around(line, s, e)})
     return events, canonicalize(authorities)
-
-
-KEEP_PREFIX = {"california", "state", "cal"}
 
 
 def _key(name: str) -> str:
@@ -285,6 +302,11 @@ def canonicalize(authorities: list[dict]) -> list[dict]:
 
 
 if __name__ == "__main__":
+    from dossier_profile import load_profile
+    configure(load_profile("en"))
+    assert [(iso, p) for _, _, iso, p in find_dates("Filed 4 March 2021, 3/4/2021 and Sept 5, 2020.")] == \
+        [("2021-03-04", "day"), ("2020-09-05", "day")]  # the general profile skips ambiguous numeric dates
+    configure(load_profile("us-california"))
     line = ("On March 14, 2019, staff issued notice under Public Resources Code section 21080(b); "
             "the California Environmental Quality Act (CEQA) applies. See 42 U.S.C. § 1983, "
             "Section 15162 of the CEQA Guidelines, 14 CCR 15183 and San José Municipal Code § 20.100.010, "

@@ -42,6 +42,7 @@ description = "Short description of the document collection"
 # output = "dist_data"         # where the finished release is written
 # cache = ".wehpah-cache"      # saved work, so rebuilds only read new or changed PDFs
 # publish_to = "owner/name"    # Hugging Face dataset
+# profile = "en"               # language, jurisdiction and domain rules (see docs/PROFILES.md)
 
 [filenames]                    # optional: pull titles and dates out of file names
 title = '^TN\d+_\d{8}T\d{6}_(.+)$'
@@ -79,7 +80,7 @@ Besides the searchable passages, every build writes three tables the explorer us
 
 ## Publishing
 
-First check that the PDFs may be shared publicly: a public Hugging Face dataset makes the PDFs and all their extracted text available to anyone. `./wehpah login` stores your write-scoped token in your user folder, never in this project. `publish` checks the release, creates the dataset if needed (public, since the explorer can only open public datasets), uploads the release, removes files from earlier releases that are no longer part of the dossier, and prints the link. Files already on Hugging Face are not uploaded again.
+First check that the PDFs may be shared publicly: a public Hugging Face dataset makes the PDFs and all their extracted text available to anyone. `./wehpah login` always asks for a token (a token saved earlier may be read-only) and stores your write-scoped token in your user folder, never in this project. `publish` checks the release, creates the dataset if needed (public, since the explorer can only open public datasets), uploads the release, removes files from earlier releases that are no longer part of the dossier, and prints the link. Files already on Hugging Face are not uploaded again.
 
 Open a published dossier with the explorer's dossier switcher or by adding `?repo=owner/name` to its address.
 
@@ -91,11 +92,13 @@ uv run --project ingestion python ingestion/entities.py     # dates and laws sel
 uv run --project ingestion python ingestion/names.py        # people and organizations self-check
 ```
 
-Quality tools for the people and organizations step (see [docs/PIPELINE.md](../docs/PIPELINE.md)):
+Quality tools (see [docs/WORKFLOW.md](../docs/WORKFLOW.md)); the labeled data lives in `evaluation/` next to `dossier.toml`:
 
 ```sh
-uv run --project ingestion python ingestion/tests/judge_eval.py <model spec> …          # compare judge models
-uv run --project ingestion python ingestion/tests/names_eval.py dist_data/names.parquet  # precision and recall
+./wehpah eval sample --n 30      # draw passages to label -> evaluation/names_to_label.json
+./wehpah eval add-labels         # keep the labeled ones in evaluation/names_gold.json
+./wehpah eval names              # precision and recall of people and organizations
+./wehpah eval judge <models> …   # compare judge models on evaluation/judge_cases.json
 ```
 
 The older entry point `uv run --project ingestion python ingestion/build_corpus.py [--verify-only]` still works and forwards to `wehpah build` / `wehpah check`.

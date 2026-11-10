@@ -19,6 +19,11 @@ Pipeline (each stage narrows or joins what the one before produced):
 
 Every mention keeps its exact words and sentence from the page, so nothing the model says
 can put a name on screen that is not written in the record.
+
+The steps are general. Word lists and patterns specific to a language, jurisdiction or domain
+(titles, organization endings, role words, signature-block wording, the judge's examples) come
+from the dossier's profile — see dossier_profile.py and docs/PROFILES.md. extract() calls
+configure(profile); call it yourself before using the helpers directly.
 """
 
 from __future__ import annotations
@@ -40,38 +45,66 @@ GLINER_LABELS = ["person", "government agency", "company", "organization", "cour
 GLINER_THRESHOLD = 0.4
 JUDGE_DEFAULT = "mlx:arthurcollet/Qwen3.6-35B-A3B-mlx-mxfp8"
 JUDGE_BATCH = 25
-PROMPT_VERSION = 2
 
 # ---------------------------------------------------------------------------
 # 1. Find
 # ---------------------------------------------------------------------------
 
-TITLE_WORDS = ("Commissioners?|Governor|Lieutenant Governor|President|Secretary|Chief|Deputy|Chair(?:man|woman|person)?|Vice Chair|Presiding Member|Associate Member|Hearing Officer|"
-               "Mr\\.|Ms\\.|Mrs\\.|Dr\\.|Hon\\.|Honorable|Senator|Assemblymember|Assembly Member|Councilmember|"
-               "Council Member|Mayor|Supervisor|Intervenor|Attorney|Professor|Judge|Justice")
 NAME_TOKEN = r"(?:[A-Z][a-z'’\-]+|[A-Z]\.)"
 PERSON = rf"({NAME_TOKEN}(?:\s+{NAME_TOKEN}){{1,3}})"
-TITLED_RE = re.compile(rf"\b(?:(?:{TITLE_WORDS})\s+)+({NAME_TOKEN}(?:\s+{NAME_TOKEN}){{0,3}})")
-
-ORG_TAIL = ("Commission|Department|District|Agency|Board|Council|Authority|Company|Corporation|Corp\\.|Inc\\.|"
-            "Incorporated|LLC|L\\.L\\.C\\.|LP|L\\.P\\.|LLP|Association|Coalition|Society|Institute|University|College|"
-            "Court|Office|Bureau|Service|Division|Committee|Foundation|Club|Alliance|Partners|Utilities|Unions?|"
-            "Network|Center|Laboratory|Group|Associates|Trust|Conservancy|Federation|Council")
-ORG_RE = re.compile(rf"\b((?:U\.S\.\s+)?(?:[A-Z][\w&'’.\-]*,?\s+(?:(?:of the|of|and|for|on|the|&)\s+)?){{1,8}}(?:{ORG_TAIL}))(?![a-z])")
-PLACE_GOV_RE = re.compile(r"\b((?:City|County|State|Town|Port) of (?:[A-Z][a-zé]+)(?:\s+[A-Z][a-zé]+){0,2})")
 ACRONYM_DEF_RE = re.compile(r"((?:[A-Z][\w&'’.\-]*\s+(?:(?:of the|of|and|for|on|the|&)\s+)?){1,9}[A-Z][\w&'’.\-]*)\s*\(\s*[\"“]?([A-Z][A-Za-z&]{1,9})[\"”]?\s*\)")
-ROLE_DEF_RE = re.compile(r"((?:[A-Z][\w&'’.\-]*\s+(?:(?:of the|of|and|for|on|the|&)\s+)?){0,8}[A-Z][\w&'’.\-]*)\s*,?\s*\(\s*(?:the\s+)?[\"“]?(Applicant|Project Owner|Owner|Petitioner|Intervenor|Respondent|Complainant|Commenter)[\"”]?\s*\)")
 CITE_AUTHOR_RE = [  # author-date references: "(Jacobs 2019a, p. 3)" and reference lists "Jacobs 2020a - Jacobs (Jacobs). ..."
     re.compile(r"\(([A-Z][A-Za-z&'’\-]+(?:\s+[A-Z][A-Za-z&'’\-]+){0,3})\s+(?:19|20)\d{2}[a-z]?[,;)\s]"),
     re.compile(r"^([A-Z][A-Za-z&'’\-]+(?:\s+[A-Z][A-Za-z&'’\-]+){0,3})\s+(?:19|20)\d{2}[a-z]?\s+[-–—]\s"),
 ]
-STRUCTURE = [  # (pattern with one name group, role)
-    (re.compile(rf"^(?:From|FROM)\s*:\s*{PERSON}"), "author"),
-    (re.compile(rf"^(?:To|TO)\s*:\s*{PERSON}"), "recipient"),
-    (re.compile(rf"^Dear\s+(?:(?:{TITLE_WORDS})\s+)?{PERSON}"), "recipient"),
-    (re.compile(rf"(?:/s/|Sincerely,|Respectfully submitted,|Respectfully,|Best regards,|Regards,)\s*(?:/s/\s*)?{PERSON}"), "signer"),
-    (re.compile(rf"\b(?:Submitted|Prepared|Filed|Signed) by:?\s+{PERSON}"), "author"),
-]
+
+# Set by configure(profile):
+TITLE_WORDS = ORG_TAIL = ""
+TITLED_RE = ORG_RE = PLACE_GOV_RE = ROLE_DEF_RE = TITLE_PREFIX_RE = LEGAL_SUFFIX = GENERIC_FRAGMENT = None
+STRUCTURE: list = []
+ROLE_WORDS: set[str] = set()
+SMALL: set[str] = set()
+JOB_WORDS: set[str] = set()
+NAME_ALIASES: list = []
+JUDGE_PROMPT = ""
+PROFILE_ID = ""
+
+
+def _alt(items) -> str:
+    return "|".join(items)
+
+
+def configure(profile: dict) -> None:
+    """Build the name finders, cleaners and the judge prompt from a profile."""
+    global TITLE_WORDS, ORG_TAIL, TITLED_RE, ORG_RE, PLACE_GOV_RE, ROLE_DEF_RE, TITLE_PREFIX_RE, LEGAL_SUFFIX
+    global GENERIC_FRAGMENT, STRUCTURE, ROLE_WORDS, SMALL, JOB_WORDS, NAME_ALIASES, JUDGE_PROMPT, PROFILE_ID
+    # ponytail: module-level settings, one profile per process; pass a config object if builds ever mix profiles.
+    n = profile["names"]
+    st = n["structure"]
+    PROFILE_ID = profile.get("id", "")
+    TITLE_WORDS = _alt(n["titles"])
+    ORG_TAIL = _alt(n["organization_endings"])
+    TITLED_RE = re.compile(rf"\b(?:(?:{TITLE_WORDS})\s+)+({NAME_TOKEN}(?:\s+{NAME_TOKEN}){{0,3}})")
+    ORG_RE = re.compile(rf"\b((?:U\.S\.\s+)?(?:[A-Z][\w&'’.\-]*,?\s+(?:(?:of the|of|and|for|on|the|&)\s+)?){{1,8}}(?:{ORG_TAIL}))(?![a-z])")
+    PLACE_GOV_RE = re.compile(rf"\b((?:{_alt(map(re.escape, n['place_governments']))}) of (?:[A-Z][a-zé]+)(?:\s+[A-Z][a-zé]+){{0,2}})")
+    ROLE_DEF_RE = re.compile(rf"((?:[A-Z][\w&'’.\-]*\s+(?:(?:of the|of|and|for|on|the|&)\s+)?){{0,8}}[A-Z][\w&'’.\-]*)\s*,?\s*\(\s*(?:the\s+)?[\"“]?({_alt(map(re.escape, n['defined_roles']))})[\"”]?\s*\)")
+    STRUCTURE = [  # (pattern with one name group, role)
+        (re.compile(rf"^(?:{_alt(map(re.escape, st['from_labels']))})\s*:\s*{PERSON}"), "author"),
+        (re.compile(rf"^(?:{_alt(map(re.escape, st['to_labels']))})\s*:\s*{PERSON}"), "recipient"),
+        (re.compile(rf"^(?:{_alt(map(re.escape, st['salutations']))})\s+(?:(?:{TITLE_WORDS})\s+)?{PERSON}"), "recipient"),
+        (re.compile(rf"(?:{_alt(map(re.escape, st['sign_offs']))})\s*(?:/s/\s*)?{PERSON}"), "signer"),
+        (re.compile(rf"\b(?:{_alt(map(re.escape, st['authored_by']))}) by:?\s+{PERSON}"), "author"),
+    ]
+    ROLE_WORDS = set(n["role_words"])
+    TITLE_PREFIX_RE = re.compile(rf"^(?:(?:{TITLE_WORDS})\s+)+")
+    SMALL = set(n["connectors"])
+    JOB_WORDS = set(n["job_words"])
+    LEGAL_SUFFIX = re.compile(rf"\b(?:{_alt(map(re.escape, n['legal_suffixes']))})$")
+    NAME_ALIASES = [(re.compile(a), b) for a, b in n.get("name_aliases", [])]
+    GENERIC_FRAGMENT = re.compile(rf"(?:(?:{_alt(n['generic_fragment_prefixes'])})\s+)?(?:{ORG_TAIL})")
+    j = n["judge"]
+    JUDGE_PROMPT = JUDGE_TEMPLATE.format(roles=j["role_examples"], groups=j["generic_group_examples"],
+                                         not_names=", ".join(j["not_names"]))
 
 
 def _acronym_fits(full: str, acr: str) -> bool:
@@ -160,18 +193,6 @@ def split_long(line: str, limit: int = 1100) -> list[tuple[int, str]]:
 # 2. Clean
 # ---------------------------------------------------------------------------
 
-ROLE_WORDS = {
-    "applicant", "staff", "commission", "committee", "intervenor", "intervenors", "petitioner", "project owner", "owner",
-    "hearing officer", "presiding member", "associate member", "the city", "the county", "the state", "city", "county",
-    "state", "district", "agency", "department", "board", "court", "the court", "counsel", "respondent", "complainant",
-    "commenter", "public", "energy commission", "energy commission staff", "cec staff", "the applicant", "the commission",
-    "the committee", "lead agency", "responsible agency", "trustee agency", "the project", "project", "cpm",
-    "compliance project manager", "parties", "the parties", "docket unit", "public adviser", "public advisor",
-}
-TITLE_PREFIX_RE = re.compile(rf"^(?:(?:{TITLE_WORDS})\s+)+")
-SMALL = {"of", "and", "for", "on", "the", "to", "in", "at", "by", "&"}
-
-
 def clean_surface(text: str) -> str:
     t = " ".join(text.replace("’", "'").split()).strip(" ,.;:-–—\"'“”()[]")
     t = re.sub(r"\s*\([^)]*\)?\s*$", "", t)  # "Name (ABC)" or a cut-off "Name (ABC"
@@ -179,12 +200,6 @@ def clean_surface(text: str) -> str:
     t = re.sub(r"^(?:the|The|THE)\s+", "", t)
     t = TITLE_PREFIX_RE.sub("", t).strip(" ,.")
     return t
-
-
-JOB_WORDS = {"senior", "planner", "manager", "director", "engineer", "environmental", "counsel", "attorney", "officer",
-             "staff", "specialist", "analyst", "associate", "principal", "project", "presiding", "commissioner",
-             "member", "chair", "president", "secretary", "assistant", "supervisor", "advisor", "adviser", "scientist",
-             "consultant", "coordinator", "executive", "general", "deputy", "chief", "vice", "esq", "phd", "ph.d", "p.e"}
 
 
 def person_name(name: str) -> str:
@@ -213,14 +228,11 @@ def ascii_lower(s: str) -> str:
     return unicodedata.normalize("NFKD", s).encode("ascii", "ignore").decode().lower()
 
 
-LEGAL_SUFFIX = re.compile(r"\b(?:inc|incorporated|llc|l l c|lp|l p|llp|corp|corporation|co|company|ltd)$")
-
-
 def key_of(name: str, kind: str = "") -> str:
     k = re.sub(r"[^a-z0-9& ]+", " ", ascii_lower(name))
     k = " ".join(k.replace("&", " and ").split())
-    k = re.sub(r"^ca ", "california ", k)
-    k = re.sub(r"\b(?:united states|u s)\b", "us", k)
+    for pattern, replacement in NAME_ALIASES:
+        k = pattern.sub(replacement, k)
     if kind != "person":
         k = re.sub(r"^the ", "", k)
         k = LEGAL_SUFFIX.sub("", k).strip()
@@ -238,11 +250,11 @@ def titlecase_caps(name: str) -> str:
 # 3. Judge
 # ---------------------------------------------------------------------------
 
-JUDGE_PROMPT = """You label candidate names found in legal documents. For each numbered candidate decide:
-- keep: true only if it is the proper name of a specific person or a specific organization (agency, company, court, group). Roles ("the Applicant", "staff", "Hearing Officer"), generic groups ("City Council" without a city), places, regions, air basins, facilities, power plants, data centers, projects, sites, buildings, plans, programs, studies, assessments, documents, tables, species and laws are false.
+JUDGE_TEMPLATE = """You label candidate names found in legal documents. For each numbered candidate decide:
+- keep: true only if it is the proper name of a specific person or a specific organization (agency, company, court, group). Roles ({roles}), generic groups ({groups}), {not_names} are false.
 - type: "person", "government", "company", "court" or "organization".
 - full_name: the fullest form of the same name that appears word-for-word in its context (else the candidate itself), without titles. Never invent words.
-Answer ONLY a JSON array, one object per candidate: [{"id": 0, "keep": true, "type": "...", "full_name": "..."}, ...]
+Answer ONLY a JSON array, one object per candidate: [{{"id": 0, "keep": true, "type": "...", "full_name": "..."}}, ...]
 
 """
 
@@ -285,7 +297,8 @@ class Judge:
             return json.load(resp)["choices"][0]["message"]["content"]
 
     def _batched(self, prompt: str, items: list[str], parse, per_item_tokens: int) -> list:
-        keys = [hashlib.sha256(json.dumps([PROMPT_VERSION, self.spec, prompt[:40], it]).encode()).hexdigest() for it in items]
+        prompt_id = hashlib.sha256(prompt.encode()).hexdigest()
+        keys = [hashlib.sha256(json.dumps([self.spec, prompt_id, it]).encode()).hexdigest() for it in items]
         cached = dict(self.cache.con.execute("SELECT key, result FROM judge WHERE key IN (SELECT unnest(?::VARCHAR[]))", [keys]).fetchall())
         todo = [i for i, k in enumerate(keys) if k not in cached]
         print(f"[names] judge ({self.model}): {len(items) - len(todo)} already decided · {len(todo)} to decide", flush=True)
@@ -312,7 +325,7 @@ class Judge:
 
     def label(self, items: list[tuple[str, list[str]]]) -> list[dict | None]:
         text = [f'"{name}" — context: ' + " | ".join(f'"{c}"' for c in ctx) for name, ctx in items]
-        return self._batched(JUDGE_PROMPT, text, lambda a: a, 30)
+        return self._batched(JUDGE_PROMPT, text, lambda a: a, 30)  # JUDGE_PROMPT is set by configure()
 
     def same(self, pairs: list[tuple[str, str, str, str]]) -> list[bool]:
         text = [f'"{a}" ("{ca}")  vs  "{b}" ("{cb}")' for a, ca, b, cb in pairs]
@@ -323,14 +336,13 @@ class Judge:
 # 4-5. Join and write
 # ---------------------------------------------------------------------------
 
-# "California Department", "the State Board": not a name on its own
-GENERIC_FRAGMENT = re.compile(rf"(?:(?:California|State|U\.S\.|US|Federal|Regional|County|City|Air|Water)\s+)?(?:{ORG_TAIL})")
-
 KINDS = {"person": "person", "government": "government", "company": "company", "court": "court", "organization": "organization",
          "government agency": "government"}
 
 
-def extract(rows: list[dict], cache_dir: Path, judge_spec: str = JUDGE_DEFAULT, finder: str = GLINER_MODEL) -> list[dict]:
+def extract(rows: list[dict], cache_dir: Path, profile: dict, judge_spec: str = JUDGE_DEFAULT,
+            finder: str = GLINER_MODEL) -> list[dict]:
+    configure(profile)
     rows = [r for r in rows if r["content_type"] != "visual_evidence"]
     cache = GlinerCache(cache_dir, finder)
     try:
@@ -532,6 +544,8 @@ def _extract(rows: list[dict], cache: GlinerCache, judge: Judge) -> list[dict]:
 
 
 if __name__ == "__main__":
+    from dossier_profile import load_profile
+    configure(load_profile("us-california"))
     line = 'SJC02 LLC ("Applicant") filed comments. Sincerely, Scott A. Galati'
     found = {(line[f["start"]:f["end"]], f["source"], f["role"]) for f in find_in_line(line)}
     assert ("SJC02 LLC", "pattern", "") in found and ("SJC02 LLC", "definition", "applicant") in found, found

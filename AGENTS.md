@@ -1,5 +1,14 @@
 # AGENTS.md — Master Build Specification: Zero-Download Legal Dossier Explorer
 
+> **Building a dossier for a new document collection, or adapting the pipeline to one?**
+> Follow [docs/WORKFLOW.md](docs/WORKFLOW.md) step by step. It marks the decisions you must ask the
+> person for (whether documents may be public, language and jurisdiction, date order, publishing)
+> and the guardrails that apply to agents (no publishing without explicit approval, never handle
+> tokens, model-drafted labels need human review). Put language-, jurisdiction- and subject-specific
+> rules in a profile ([docs/PROFILES.md](docs/PROFILES.md)), not in the code; record every decision
+> with its evidence in [docs/PIPELINE.md](docs/PIPELINE.md) or the dossier's notes; measure with
+> `./wehpah eval` before and after every change.
+
 ## 0. ROLE & CRITICAL EXECUTION RULES
 You are a deterministic software builder executing a strict specification. Follow these rules without exception:
 1. **No Hallucinated Schemas:** Use the exact column names, data types, and JSON keys defined in Section 2. Do not rename fields between Python and JavaScript.
@@ -19,12 +28,25 @@ project-root/
 ├── ingestion/
 │   ├── pyproject.toml         # Managed via uv
 │   ├── build_corpus.py        # End-to-end OCR, VLM captioning, clustering & DuckDB Parquet export
-│   ├── wehpah.py              # `./wehpah` command: build / check / preview / login / publish / studio
+│   ├── wehpah.py              # `./wehpah` command: build / check / preview / login / publish / eval / studio
+│   ├── entities.py            # Dates and law citations (general steps; rules from the profile)
+│   ├── names.py               # People and organizations: find, clean, judge, join (general steps)
+│   ├── dossier_profile.py     # Loads a profile (extends + merge)
+│   ├── evaluate.py            # `./wehpah eval`: precision/recall, judge comparison, label sampling
+│   ├── profiles/              # Language/jurisdiction/domain rules: en.toml, us-california.toml
 │   ├── devserver.py           # Range-capable local server + Studio API
 │   └── studio.html            # WeHPAH! Studio (local build & publish page)
+├── docs/
+│   ├── PIPELINE.md            # Decision record: every stage, general vs profile, evidence
+│   ├── PROFILES.md            # Profile reference and how to write one
+│   └── WORKFLOW.md            # Playbook for a new dossier (people and coding agents)
+├── evaluation/                # This dossier's labeled data: names_gold.json, judge_cases.json
 ├── dist_data/                 # Output folder to upload to Hugging Face Dataset repo
 │   ├── corpus.parquet         # Sorted by cluster_id with fixed ROW_GROUP_SIZE
 │   ├── centroids.json         # K-means cluster centers for zero-download browser routing
+│   ├── events.parquet         # Dates (one row per mention, verbatim)
+│   ├── authorities.parquet    # Laws, regulations and cases (one row per citation, verbatim)
+│   ├── names.parquet          # People and organizations (one row per mention, verbatim)
 │   └── pdfs/                  # Web-optimized copies of raw_pdfs for PDF.js range streaming
 ├── index.html                 # Static Vanilla JS frontend at repo root (GitHub Pages)
 ├── style.css

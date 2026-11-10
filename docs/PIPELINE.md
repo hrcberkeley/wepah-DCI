@@ -2,7 +2,21 @@
 
 This is the decision record for the WeHPAH! builder (`./wehpah build`). It explains each stage that runs
 after text extraction, the choices made, the evidence behind them, and how to check or change them for
-your own dossier. The step-by-step build guide is [ingestion/INGESTION.md](../ingestion/INGESTION.md).
+your own dossier. The step-by-step build guide is [ingestion/INGESTION.md](../ingestion/INGESTION.md);
+adapting the pipeline to a new collection is [WORKFLOW.md](WORKFLOW.md); the rules that change per
+language, jurisdiction or subject are in a **profile** ([PROFILES.md](PROFILES.md)).
+
+## General steps, profile rules
+
+Every decision below is marked as one of:
+
+- **General** — part of the pipeline's logic, in the code, the same for every dossier.
+- **Profile** — a word list, pattern or example that depends on language, jurisdiction or subject.
+  It lives in `ingestion/profiles/<name>.toml`; the Microsoft Datacenter dossier uses
+  `us-california`, which extends the general English profile `en`.
+
+When adapting the pipeline, change profile rules; change general steps only when an error cannot
+be fixed by a profile, and then keep the new step general.
 
 ## The rule every stage follows
 
@@ -31,10 +45,11 @@ are not in the corpus.
 
 ## Dates (`entities.py`)
 
-**What it finds:** "March 14, 2019", "14 March 2019", "Mar. 14, 2019", "2019-03-14", "3/14/2019", and
-month-only "June 2020". Numeric dates are read **month/day/year** (US convention).
+**What it finds:** "March 14, 2019", "14 March 2019", "Mar. 14, 2019", "2019-03-14", month-only
+"June 2020" *(general)*; numeric dates like "3/14/2019" in the order the profile sets — `mdy` in
+`us-california`, skipped in `en` because the order cannot be known *(profile: `[dates]`)*.
 
-**Decisions:**
+**Decisions (all general):**
 - *Bare years and relative dates ("two weeks later") are not converted.* Bare years are mostly statute
   names, citations and plan horizons; relative dates need a reference date the text rarely states.
   Converting either would put invented dates on a timeline.
@@ -47,12 +62,13 @@ month-only "June 2020". Numeric dates are read **month/day/year** (US convention
 entries on the timeline. About a third are bare dates from page headers or footers; they stay, because the
 document title gives them context and dropping them would hide filing dates.
 
-**For another dossier:** non-US day/month order needs a change to the `num` pattern in `DATE_PATTERNS`.
-Run `uv run python ingestion/entities.py` after any change; it is a self-check.
+**For another dossier:** set `[dates] numeric_order` and, for another language, `months` in the profile.
+Run `uv run --project ingestion python ingestion/entities.py` after any change; it is a self-check.
 
 ## Laws, regulations and cases (`entities.py`)
 
-**What it finds:** U.S.C. and C.F.R. sections; California codes ("Public Resources Code section 21080(b)",
+**What it finds:** *(general)* named Acts and the acronyms documents define for them, with section
+numbers pulled in from either side; *(profile: `[laws]` in `us-california`)* U.S.C. and C.F.R. sections; California codes ("Public Resources Code section 21080(b)",
 "Cal. Pub. Res. Code § 21080"); California Code of Regulations titles; CEQA Guidelines; named Acts
 ("Clean Water Act", "Warren-Alquist Act") and the acronyms a document defines for them ("(CEQA)");
 municipal codes; court cases (through the [eyecite](https://github.com/freelawproject/eyecite) library
@@ -60,12 +76,12 @@ from the Free Law Project). "Section 15162 of the CEQA Guidelines" and "the Act,
 section number in from either side.
 
 **Decisions:**
-- *Patterns for statutes and regulations, eyecite only for cases.* eyecite handles formal citation styles
+- *(profile)* *Patterns for statutes and regulations, eyecite only for cases.* eyecite handles formal citation styles
   well but misses the plain-English forms filings actually use ("Public Resources Code section 21166");
   case citations are the reverse, so each tool does what it does best.
-- *A case needs both party names.* Without that rule eyecite reads street addresses ("11400 S.E. 8") and
+- *(general)* *A case needs both party names.* Without that rule eyecite reads street addresses ("11400 S.E. 8") and
   page references as cases.
-- *One name per law.* Spelling variants share the most common spelling ("Warren-Alquist" and "Warren
+- *(general; jurisdiction words from the profile)* *One name per law.* Spelling variants share the most common spelling ("Warren-Alquist" and "Warren
   Alquist"); stray leading words fall away when the shorter name is already known ("Regulatory
   Requirements California Environmental Quality Act" → "California Environmental Quality Act"; "Federal
   Clean Air Act" → "Clean Air Act"); "... Act of 1970" joins "... Act". **A jurisdiction word is never
@@ -75,23 +91,25 @@ section number in from either side.
 ("Warren-Alqueist Act") stay separate entries, and the "people and organizations" judge below is the
 planned way to clean those too.
 
-**For another jurisdiction:** add patterns to `LAW_PATTERNS` (and a code-name list like `CA_CODES` for
-your state). The self-check at the bottom of `entities.py` shows the expected format.
+**For another jurisdiction:** write `[[laws.patterns]]` and `code_names` in a profile
+([PROFILES.md](PROFILES.md) explains the format); `us-california.toml` is a complete example.
 
 ## People and organizations (`names.py`)
 
 This stage runs as a five-step pipeline. Each step either finds more (early) or removes and joins (late),
-so each can be tuned on its own.
+so each can be tuned on its own. **All five steps are general.** The word lists and patterns they use
+— titles, organization endings, role words, signature-block wording, job words, the judge's
+examples, name spelling rules — come from the profile's `[names]` section.
 
 1. **Find, recall first.** Four independent sources, so a name missed by one is caught by another:
    - **GLiNER**, a name-finding model (`urchade/gliner_multi-v2.1`), asked for *person*, *government
      agency*, *company*, *organization* and *court*;
-   - **patterns**: organization names ending in Commission, District, Department, Inc., LLC …;
+   - **patterns** *(profile word lists)*: organization names ending in Commission, District, Department, Inc., LLC …;
      "City of …"; titled people ("Commissioner Karen Douglas"); acronym definitions ("Bay Area Air
      Quality Management District (BAAQMD)");
-   - **document structure**: `From:` / `To:` lines, "Dear …", signature blocks, `/s/`, "Submitted by".
+   - **document structure** *(profile: `[names.structure]`)*: `From:` / `To:` lines, "Dear …", signature blocks, `/s/`, "Submitted by".
      These also give a **role** (wrote, addressed to, signed), which is usually what a lawyer wants;
-   - **defined roles**: `SJC02 LLC ("Applicant")` records that SJC02 LLC is the Applicant;
+   - **defined roles** *(profile: `defined_roles`)*: `SJC02 LLC ("Applicant")` records that SJC02 LLC is the Applicant;
    - **later uses of defined acronyms**: once a document defines "California Energy Commission (CEC)",
      every "CEC" in the dossier is a candidate (added after the first measurement missed "CEC staff");
    - **author-date citations**: "(Jacobs 2019a, p. 3)" and reference lists "Jacobs 2020a - …" (added
@@ -105,8 +123,10 @@ so each can be tuned on its own.
    different documents, and returns keep/drop, a type, and the fullest written form of the name. The
    fuller form is accepted **only if it appears word for word in one of those sentences** and contains the
    candidate's last word; otherwise the candidate stands. Answers are cached, so a rebuild only judges
-   new names. The prompt names what is *not* an organization (facilities, power plants, data centers,
-   projects, air basins, studies …) because the first version let those through.
+   new names. The prompt names what is *not* an organization because the first version let those
+   through *(profile: `[names.judge] not_names` — for this dossier facilities, power plants, data
+   centers, projects, air basins, studies …)*. The cache is keyed by the exact prompt, so changing
+   the examples re-judges every name.
 4. **Join.**
    - The fuller form is applied **only where it is written in that mention's own line.** The name
      finder sometimes returns a fragment ("California Department" from "California Department of Water
@@ -128,8 +148,8 @@ so each can be tuned on its own.
 ### Choosing the judge model
 
 The judge was chosen by scoring every complete local model on 30 real cases with known answers
-(`ingestion/tests/judge_cases.json`), smallest first, with the exact prompt the build uses
-(`ingestion/tests/judge_eval.py`). Results on an Apple M4 Max, 128 GB, November 2026:
+(`evaluation/judge_cases.json`), smallest first, with the exact prompt the build uses
+(`./wehpah eval judge <models>`). Results on an Apple M4 Max, 128 GB, November 2026:
 
 | Model | Keep/drop right | Type right | Full name right | Seconds for 30 |
 |---|---|---|---|---|
@@ -149,14 +169,9 @@ reviewed result.
 
 ### Measuring quality
 
-`ingestion/tests/names_gold.json` holds passages whose people and organizations were marked by hand.
-After a build:
-
-```sh
-uv run --project ingestion python ingestion/tests/names_eval.py dist_data/names.parquet
-```
-
-prints precision (of the names shown, how many are real) and recall (of the real names, how many were
+`evaluation/names_gold.json` holds passages whose people and organizations were marked by hand
+(`./wehpah eval sample` draws new ones to label, `./wehpah eval add-labels` keeps them). After a build,
+`./wehpah eval names` prints precision (of the names shown, how many are real) and recall (of the real names, how many were
 found), and lists each wrong and missed name. Add passages from your own dossier to the file — the more
 labeled passages, the more trustworthy the numbers — and re-run after any change to patterns, thresholds
 or models.
@@ -173,7 +188,11 @@ Measured on 50 hand-labeled passages (57 names):
 The release holds 43,424 mentions of 4,343 people and organizations (11,676 distinct candidate names
 judged, 5,672 kept, 127 scanning-error spellings joined after a pairwise check). Remaining errors are
 mostly facilities or named rooms read as organizations or people ("Regional Wastewater Treatment Plant",
-"Charles Imbrecht Hearing Room") and project acronyms ("SJDC"); `names_eval.py` lists them.
+"Charles Imbrecht Hearing Room") and project acronyms ("SJDC"); `./wehpah eval names` lists them.
+
+Moving the California rules into the `us-california` profile (November 2026) was checked by rebuilding
+dates, laws and names from the same inputs: all 7,680 date, 5,615 law and 42,175 name rows were
+identical to the release built before the change.
 
 ### Cost
 
@@ -197,9 +216,10 @@ judge or the finder re-runs that step for every name; the old answers stay in th
 ## Checks to run after changing anything
 
 ```sh
-uv run --project ingestion python ingestion/entities.py      # dates and laws self-check
-uv run --project ingestion python ingestion/names.py         # people/organizations self-check
-uv run --project ingestion python ingestion/tests/judge_eval.py <model spec> …
-uv run --project ingestion python ingestion/tests/names_eval.py dist_data/names.parquet
-./wehpah check                                                # the whole release
+uv run --project ingestion python ingestion/entities.py         # dates and laws self-check
+uv run --project ingestion python ingestion/names.py            # people/organizations self-check
+uv run --project ingestion python ingestion/dossier_profile.py  # profile loading self-check
+./wehpah eval judge <model spec> …                               # compare judge models
+./wehpah eval names                                              # precision and recall
+./wehpah check                                                   # the whole release
 ```

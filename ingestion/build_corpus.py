@@ -24,6 +24,8 @@ import re
 import shutil
 import sys
 import tempfile
+
+import dossier_profile
 import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
@@ -620,13 +622,13 @@ def stage_export(all_rows: list[dict], out_dir: Path) -> None:
     con.close()
 
 
-def stage_entities(all_rows: list[dict], out_dir: Path) -> dict:
+def stage_entities(all_rows: list[dict], out_dir: Path, profile: dict) -> dict:
     """Dated events and cited authorities -> events.parquet / authorities.parquet (see entities.py)."""
     import duckdb
     import pyarrow as pa
     import entities
 
-    events, authorities = entities.extract(all_rows)
+    events, authorities = entities.extract(all_rows, profile)
     con = duckdb.connect(":memory:")
     for name, rows, order in (("events", events, "date, doc_id, page_number, passage_id"),
                               ("authorities", authorities, "instrument, provision, doc_id, page_number, passage_id")):
@@ -656,7 +658,7 @@ def stage_names(all_rows: list[dict], out_dir: Path, settings) -> dict:
             print("[names] skipped: the judge model needs an Apple-silicon Mac, or set [names] judge to a "
                   "local model server (see docs/PIPELINE.md)", flush=True)
             return {}
-    rows = names.extract(all_rows, settings.cache, judge, settings.names_finder or names.GLINER_MODEL)
+    rows = names.extract(all_rows, settings.cache, settings.profile, judge, settings.names_finder or names.GLINER_MODEL)
     if not rows:
         return {}
     con = duckdb.connect(":memory:")
@@ -844,7 +846,7 @@ def build(settings, limit: int = 0, force: bool = False, workers: int | None = N
             sources.append({"filename": p.name, "doc_id": slugify(p.name), "sha256": source_hashes[p.name]})
         model_revision = stage_embed_and_cluster(all_rows, staging, settings.cache)
         stage_export(all_rows, staging)
-        entity_counts = stage_entities(all_rows, staging)
+        entity_counts = stage_entities(all_rows, staging, settings.profile)
         entity_counts.update(stage_names(all_rows, staging, settings))
         empty_pages = pages_without_text(extracted)
         manifest = {
@@ -856,6 +858,7 @@ def build(settings, limit: int = 0, force: bool = False, workers: int | None = N
             **entity_counts,
             "build": {"cache_version": CACHE_VERSION, "source_files": sources,
                       "trial_limit": limit or None,
+                      "profile": settings.profile["id"], "profile_fingerprint": dossier_profile.fingerprint(settings.profile),
                       "pages_without_text": empty_pages,
                       "extraction_tools": versions("docling", "docling-core", "pypdfium2", "ocrmac"),
                       "ocr_backend": "ocrmac/Apple Vision" if sys.platform == "darwin" else "docling default",
