@@ -246,7 +246,7 @@ def passage_lines(text: str) -> list[str]:
     return [" ".join(part.split()) for part in str(text or "").split("\n") if part.strip()]
 
 
-ROW_KEYS = ("passage_id", "doc_id", "doc_title", "page_number", "bbox_x_pct", "bbox_y_pct", "bbox_w_pct", "bbox_h_pct")
+ROW_KEYS = ("passage_id", "doc_id", "doc_title", "doc_date", "page_number", "bbox_x_pct", "bbox_y_pct", "bbox_w_pct", "bbox_h_pct")
 
 
 def extract(rows: list[dict], profile: dict) -> tuple[list[dict], list[dict]]:

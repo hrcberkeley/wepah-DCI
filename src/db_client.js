@@ -476,6 +476,86 @@ export async function nameMentions(entity, passageIds = null, limit = 300) {
     ) WHERE rn = 1 ORDER BY role = '' , doc_id, page_number, passage_id LIMIT ${Math.trunc(limit)};`));
 }
 
+// ---------- links between names, laws and dates ----------
+// A subject is { t: 'name' | 'law' | 'date', key, sub? }: a person or organization (key = entity),
+// a law (key = instrument, sub = section) or a date (key = "2019-11-15" or "2019-11").
+
+async function entityFiles() {
+  const reg = (k) => (activeDossier?.[k] ? registerParquet(dataUrl(activeDossier[k])) : null);
+  const [names, laws, dates] = await Promise.all([reg('names_path'), reg('authorities_path'), reg('events_path')]);
+  return { names, laws, dates };
+}
+
+function subjectSource(files, s) {
+  if (s.t === 'name') return [files.names, `entity = ${sqlString(s.key)}`];
+  if (s.t === 'law') return [files.laws, `instrument = ${sqlString(s.key)}${s.sub ? ` AND provision = ${sqlString(s.sub)}` : ''}`];
+  return [files.dates, `date = ${sqlString(s.key)}`];
+}
+
+/** Every name, law and date found in these passages: passage_id -> [{ t, text, key }]. */
+export async function mentionsIn(passageIds) {
+  const out = new Map();
+  if (!passageIds.length) return out;
+  const f = await entityFiles();
+  const ids = `passage_id IN (${idList(passageIds)})`;
+  const parts = [
+    f.names && `SELECT passage_id, 'name' AS t, mention_text AS text, entity AS key FROM read_parquet('${f.names}') WHERE ${ids}`,
+    f.laws && `SELECT passage_id, 'law', cite_text, instrument FROM read_parquet('${f.laws}') WHERE ${ids}`,
+    f.dates && `SELECT passage_id, 'date', date_text, date FROM read_parquet('${f.dates}') WHERE ${ids}`,
+  ].filter(Boolean);
+  if (!parts.length) return out;
+  for (const r of rowsToObjects(await runQuery(parts.join(' UNION ALL ')))) {
+    if (!out.has(r.passage_id)) out.set(r.passage_id, []);
+    out.get(r.passage_id).push(r);
+  }
+  return out;
+}
+
+/** How often a subject is mentioned, the span of its documents' dates, and the people,
+ *  organizations, laws and dates named in the same passages (most shared passages first). */
+export async function related(subject, limit = 12) {
+  const f = await entityFiles();
+  const [file, where] = subjectSource(f, subject);
+  const ids = `(SELECT DISTINCT passage_id FROM read_parquet('${file}') WHERE ${where})`;
+  const not = (col, t) => (subject.t === t ? `AND ${col} <> ${sqlString(subject.key)}` : '');
+  const base = `count(DISTINCT passage_id) AS passages, count(DISTINCT doc_id) AS documents`;
+  let facts;
+  try { // doc_date is in releases built from November 2026 on
+    facts = rowsToObjects(await runQuery(`SELECT ${base},
+      min(doc_date) FILTER (WHERE doc_date <> 'Undated') AS first, max(doc_date) FILTER (WHERE doc_date <> 'Undated') AS last
+      FROM read_parquet('${file}') WHERE ${where}`))[0];
+  } catch { facts = rowsToObjects(await runQuery(`SELECT ${base} FROM read_parquet('${file}') WHERE ${where}`))[0]; }
+  const out = { facts, people: [], orgs: [], laws: [], dates: [] };
+  if (f.names) {
+    const rows = rowsToObjects(await runQuery(`
+      SELECT entity AS key, any_value(kind) AS kind, count(DISTINCT passage_id) AS n
+      FROM read_parquet('${f.names}') WHERE passage_id IN ${ids} ${not('entity', 'name')}
+      GROUP BY entity QUALIFY row_number() OVER (PARTITION BY any_value(kind) = 'person' ORDER BY n DESC, entity) <= ${limit}
+      ORDER BY n DESC, entity`));
+    out.people = rows.filter((r) => r.kind === 'person');
+    out.orgs = rows.filter((r) => r.kind !== 'person');
+  }
+  if (f.laws) out.laws = rowsToObjects(await runQuery(`
+      SELECT instrument AS key, count(DISTINCT passage_id) AS n FROM read_parquet('${f.laws}')
+      WHERE passage_id IN ${ids} ${not('instrument', 'law')} GROUP BY instrument ORDER BY n DESC, key LIMIT ${limit}`));
+  if (f.dates) out.dates = rowsToObjects(await runQuery(`
+      SELECT * FROM (SELECT date AS key, any_value(precision) AS precision, count(DISTINCT passage_id) AS n
+        FROM read_parquet('${f.dates}') WHERE passage_id IN ${ids} ${not('date', 'date')}
+        GROUP BY date ORDER BY n DESC, key LIMIT ${limit}) ORDER BY key`));
+  return out;
+}
+
+/** Every passage that mentions one date, one per passage. */
+export async function dateMentions(date, limit = 300) {
+  if (!hasEntities()) return [];
+  const file = await registerParquet(dataUrl(activeDossier.events_path));
+  return rowsToObjects(await runQuery(`
+    SELECT date, precision, date_text, ${PLACE_COLUMNS} FROM (
+      SELECT *, row_number() OVER (PARTITION BY passage_id) AS rn
+      FROM read_parquet('${file}') WHERE date = ${sqlString(date)}
+    ) WHERE rn = 1 ORDER BY doc_id, page_number, passage_id LIMIT ${Math.trunc(limit)};`));
+}
+
 // ---------- helpers ----------
 /** Escape a JS string as a DuckDB string literal. */
 function sqlString(s) {

@@ -32,7 +32,7 @@ This opens `http://127.0.0.1:8410/?local`, which searches the local `dist_data/`
 - **Explore Concepts** computes a query representation in a Web Worker, selects the two closest subject clusters, and ranks their passages. It is a discovery aid: its fixed cluster selection can miss relevant passages.
 - **Ask the Dossier** combines keyword and concept candidates, reranks a candidate pool, and displays source sentences with citations. An optional on-device model selects source sentences; its output must pass the quote and statement checks. If that model is unavailable, the app displays extracted key passages.
 
-- **Timeline, Laws & cases cited, People and Organizations** list what the build found across the whole dossier (links on the cover) or within the current results (the switch above the results). "When…?", "Which law…?" and "Who…?" questions in Ask the Dossier are answered from the same tables. Every entry is quoted exactly as written and opens its page.
+- **Timeline, Laws & cases cited, People and Organizations** list what the build found across the whole dossier (links on the cover) or within the current results (the switch above the results). "When…?", "Which law…?" and "Who…?" questions in Ask the Dossier are answered from the same tables. Every entry is quoted exactly as written and opens its page. Names, laws and dates inside passages are links: each opens a page with every passage that mentions it and what else is named alongside. Every view has its own link to share.
 
 The PDF viewer uses normalized, top-left page coordinates prepared during ingestion. A citation opens the original page and highlights the source item's region. The region can be broader than the exact quoted sentence.
 

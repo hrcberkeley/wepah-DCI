@@ -113,9 +113,9 @@ async function boot() {
   el.pills.forEach((pill) => {
     pill.addEventListener('click', () => setMode(pill.dataset.mode));
   });
-  el.button.addEventListener('click', () => runSearch());
+  el.button.addEventListener('click', () => submitSearch());
   el.input.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') runSearch();
+    if (e.key === 'Enter') submitSearch();
     // Escape folds the compact strip back into the full search cover.
     if (e.key === 'Escape' && document.body.classList.contains('compact')) {
       setCompact(false);
@@ -124,11 +124,11 @@ async function boot() {
   });
   el.expand.addEventListener('click', () => { setCompact(false); el.input.focus(); });
   $('view-filter').addEventListener('input', applyFilter);
-  $('home-link').addEventListener('click', (e) => { e.preventDefault(); goHome(); });
-  $('browse-timeline').addEventListener('click', () => browse('timeline', null));
-  $('browse-laws').addEventListener('click', () => browse('laws', null));
-  $('browse-people').addEventListener('click', () => browse('people', null));
-  $('browse-orgs').addEventListener('click', () => browse('orgs', null));
+  $('home-link').addEventListener('click', (e) => { e.preventDefault(); go('#/'); });
+  $('browse-timeline').addEventListener('click', () => go('#/timeline'));
+  $('browse-laws').addEventListener('click', () => go('#/laws'));
+  $('browse-people').addEventListener('click', () => go('#/people'));
+  $('browse-orgs').addEventListener('click', () => go('#/orgs'));
   document.querySelectorAll('.view-option').forEach((b) => b.addEventListener('click', () => {
     if (b.dataset.view === 'passages') { renderEvidenceCards(state.lastRows, state.mode, state.lastQuery); setView('passages'); }
     else browse(b.dataset.view, state.lastRows.map((r) => r.passage_id));
@@ -144,6 +144,39 @@ async function boot() {
   }
   updateBrowseLinks();
   el.input.focus();
+  window.addEventListener('hashchange', route);
+  if (location.hash.length > 2) route();
+}
+
+// ---------- links: every view has an address, so it can be shared and the browser's Back works ----------
+//   #/  #/timeline  #/laws  #/people  #/orgs  #/search/<mode>/<words>
+//   #/name/<entity>  #/law/<instrument>[/<section>]  #/date/<YYYY-MM[-DD]>
+const enc = encodeURIComponent;
+const linkTo = { name: (k) => `#/name/${enc(k)}`, law: (k) => `#/law/${enc(k)}`, date: (k) => `#/date/${k}` };
+
+function go(hash) {
+  if (location.hash === hash) route();
+  else location.hash = hash;
+}
+
+function route() {
+  const [what, a, b] = location.hash.replace(/^#\/?/, '').split('/').map((p) => decodeURIComponent(p || ''));
+  if (!what) return goHome();
+  if (['timeline', 'laws', 'people', 'orgs'].includes(what)) return browse(what, null);
+  if (what === 'search' && MODES[a] && b) {
+    if (state.mode !== a) setMode(a);
+    el.input.value = b;
+    return runSearch();
+  }
+  if (what === 'name' && a) return showMentions(null, a, null);
+  if (what === 'law' && a) return showCitations(a, b || '', null);
+  if (what === 'date' && /^\d{4}-\d{2}(-\d{2})?$/.test(a)) return showDate(a);
+}
+
+function submitSearch() {
+  const query = el.input.value.trim();
+  if (!query) { el.input.focus(); return; }
+  go(`#/search/${state.mode}/${enc(query)}`);
 }
 
 function updateBrowseLinks() {
@@ -174,6 +207,7 @@ function selectDossier(repo, manifest) {
   updateBrowseLinks();
   setView(null);
   setCompact(false);
+  history.replaceState(null, '', location.pathname + location.search);
   setStatus(`${manifest.title} is ready — ${manifest.document_count.toLocaleString()} documents.`);
 }
 
@@ -209,7 +243,7 @@ function setCompact(on) {
 // ---------- search dispatch ----------
 async function runSearch() {
   const query = el.input.value.trim();
-  if (!query) { el.input.focus(); return; }
+  if (!query) return;
   if (!db.isReady()) return;
   if (state.searching || state.switching) return;
 
@@ -349,9 +383,9 @@ function renderEvidenceCards(rows, mode, query) {
     card.dataset.passageId = row.passage_id;
     card.style.setProperty('--i', idx); // stagger for the rise + highlighter swipe
 
-    const quoteHtml = mode === 'exact'
-      ? highlightExactPhrase(exactExcerpt(row.passage_text, query), query)
-      : escapeHtml(excerpt(row.passage_text));
+    const text = mode === 'exact' ? exactExcerpt(row.passage_text, query) : excerpt(row.passage_text);
+    const mark = mode === 'exact' ? query : '';
+    const quoteHtml = highlightExactPhrase(text, mark);
 
     card.innerHTML = `
       <header class="entry-head">
@@ -363,15 +397,57 @@ function renderEvidenceCards(rows, mode, query) {
       <p class="entry-meta" title="${escapeHtml(`${row.doc_date} · ${row.doc_id}.pdf`)}">${escapeHtml(row.doc_date)} · ${escapeHtml(row.doc_id)}.pdf</p>
     `;
 
-    card.addEventListener('click', () => {
+    card.addEventListener('click', (e) => {
+      if (e.target.closest('a.ent')) return;
       if (state.activeCard) state.activeCard.classList.remove('active');
       state.activeCard = card;
       card.classList.add('active');
       openGrounding(row);
     });
+    card.quote = { text, mark };
 
     el.stream.appendChild(card);
   }
+  linkMentions();
+}
+
+/** Turn the names, laws and dates found in each shown passage into links to their pages.
+ *  Each link covers the exact words the build found in that passage. */
+async function linkMentions(skip = null) {
+  const cards = [...el.stream.querySelectorAll('.entry')].filter((c) => c.quote && c.dataset.passageId);
+  if (!cards.length || cards.length > 400 || !db.hasEntities()) return;
+  let found;
+  try { found = await db.mentionsIn([...new Set(cards.map((c) => c.dataset.passageId))]); }
+  catch (err) { console.warn('links unavailable:', err); return; }
+  for (const c of cards) {
+    const ms = (found.get(c.dataset.passageId) || []).filter((m) => !(skip && m.t === skip.t && m.key === skip.key));
+    if (ms.length && c.isConnected) c.querySelector('.entry-passage').innerHTML = linkify(c.quote.text, ms, c.quote.mark);
+  }
+}
+
+function linkify(text, mentions, mark) {
+  const spans = [];
+  const seen = new Set();
+  for (const m of mentions) {
+    const id = `${m.t}\u0000${m.key}\u0000${m.text}`;
+    if (seen.has(id) || !m.text) continue;
+    seen.add(id);
+    const words = m.text.trim().split(/\s+/).map(escapeRegExp).join('\\s+');
+    for (const hit of text.matchAll(new RegExp(`(?<![\\p{L}\\p{N}])${words}(?![\\p{L}\\p{N}])`, 'gu'))) {
+      spans.push({ s: hit.index, e: hit.index + hit[0].length, m });
+    }
+  }
+  spans.sort((a, b) => a.s - b.s || b.e - a.e);
+  let html = '';
+  let at = 0;
+  for (const sp of spans) {
+    if (sp.s < at) continue; // overlaps a longer mention already linked
+    const title = { name: 'Open everything about', law: 'Open every citation of', date: 'Open everything dated' }[sp.m.t];
+    html += highlightExactPhrase(text.slice(at, sp.s), mark)
+      + `<a class="ent ent-${sp.m.t}" href="${linkTo[sp.m.t](sp.m.key)}" title="${escapeHtml(`${title} ${sp.m.t === 'date' ? sp.m.text : sp.m.key}`)}">${highlightExactPhrase(text.slice(sp.s, sp.e), mark)}</a>`;
+    at = sp.e;
+  }
+  return html + highlightExactPhrase(text.slice(at), mark);
 }
 
 function openGrounding(row) {
@@ -491,7 +567,7 @@ function backLink(scoped) {
   b.className = 'back-link';
   b.textContent = scoped ? '← Results' : '← Start';
   b.addEventListener('click', () => {
-    if (!scoped) return goHome();
+    if (!scoped) return go('#/');
     renderEvidenceCards(state.lastRows, state.mode, state.lastQuery);
     setView('passages');
   });
@@ -502,9 +578,11 @@ function scopeLabel(scoped) {
   return scoped ? `in these results · “${escapeHtml(state.lastQuery)}”` : 'whole dossier';
 }
 
-function placeEntry(row, idx, { head, tag, quoteHtml, meta }) {
+function placeEntry(row, idx, { head, tag, quote, quoteHtml, meta }) {
   const card = document.createElement('article');
   card.className = 'entry';
+  card.dataset.passageId = row.passage_id;
+  if (quote) { card.quote = quote; quoteHtml = highlightExactPhrase(quote.text, quote.mark); }
   card.style.setProperty('--i', Math.min(idx, 20));
   card.innerHTML = `
     <header class="entry-head">
@@ -514,7 +592,8 @@ function placeEntry(row, idx, { head, tag, quoteHtml, meta }) {
     </header>
     <p class="entry-passage">${quoteHtml}</p>
     ${meta ? `<p class="entry-meta">${meta}</p>` : ''}`;
-  card.addEventListener('click', () => {
+  card.addEventListener('click', (e) => {
+    if (e.target.closest('a.ent')) return;
     if (state.activeCard) state.activeCard.classList.remove('active');
     state.activeCard = card;
     card.classList.add('active');
@@ -544,7 +623,7 @@ function renderTimeline(events, scoped) {
     }
     const n = Number(ev.mentions);
     el.stream.appendChild(placeEntry(ev, idx, {
-      head: `<span class="entry-date">${formatDate(ev.date, ev.precision)}</span>
+      head: `<a class="entry-date ent" href="${linkTo.date(ev.date)}" title="Open everything dated ${escapeHtml(formatDate(ev.date, ev.precision))}">${formatDate(ev.date, ev.precision)}</a>
              <h3 class="entry-doc" title="${escapeHtml(ev.doc_title)}">${escapeHtml(ev.doc_title)}</h3>`,
       quoteHtml: highlightExactPhrase(ev.sentence, ev.date_text),
       meta: n > 1 ? `Mentioned ${n} times in this document` : '',
@@ -573,7 +652,8 @@ function renderLawIndex(laws, passageIds) {
       ${provisions.length ? `<p class="law-provisions">${provisions.slice(0, 24).map((p) => `<button type="button" class="provision" data-p="${escapeHtml(p)}">§ ${escapeHtml(p)}</button>`).join('')}${provisions.length > 24 ? `<span class="provision-more">+${provisions.length - 24} more</span>` : ''}</p>` : ''}`;
     item.addEventListener('click', (e) => {
       const p = e.target.closest('.provision')?.dataset.p || '';
-      showCitations(law.instrument, p, passageIds);
+      if (scoped) showCitations(law.instrument, p, passageIds);
+      else go(`${linkTo.law(law.instrument)}${p ? `/${enc(p)}` : ''}`);
     });
     el.stream.appendChild(item);
   }
@@ -603,59 +683,123 @@ function renderNameIndex(group, names, passageIds) {
         <span class="entry-tag tag-related">${Number(n.mentions)} mention${Number(n.mentions) === 1 ? '' : 's'} · ${Number(n.documents)} doc${Number(n.documents) === 1 ? '' : 's'}</span>
       </header>
       ${notes ? `<p class="entry-meta">${escapeHtml(notes)}</p>` : ''}`;
-    item.addEventListener('click', () => showMentions(group, n.entity, passageIds));
+    item.addEventListener('click', () => (scoped ? showMentions(group, n.entity, passageIds) : go(linkTo.name(n.entity))));
     el.stream.appendChild(item);
   }
   enableFilter(group === 'people' ? 'Filter people…' : 'Filter organizations…');
 }
 
+/** One person's or organization's passages. With passageIds: only in those search results.
+ *  Without: the whole dossier, headed by its profile (#/name/…). */
 async function showMentions(group, entity, passageIds) {
-  if (state.searching) return;
-  state.searching = true;
-  renderStreamLoading();
-  try {
-    const rows = await db.nameMentions(entity, passageIds);
-    el.count.hidden = false;
-    el.count.innerHTML = `<button type="button" class="back-link">← All ${group === 'people' ? 'people' : 'organizations'}</button> <b>${rows.length} passage${rows.length === 1 ? '' : 's'}</b> · ${escapeHtml(entity)}`;
-    el.count.querySelector('.back-link').addEventListener('click', () => browse(group, passageIds));
-    el.stream.innerHTML = '';
-    for (const [idx, row] of rows.entries()) {
-      el.stream.appendChild(placeEntry(row, idx, {
-        head: `<h3 class="entry-doc" title="${escapeHtml(row.doc_title)}">${escapeHtml(row.doc_title)}</h3>`,
-        tag: ROLE_LABEL[row.role] ? escapeHtml(ROLE_LABEL[row.role]) : '',
-        quoteHtml: highlightExactPhrase(row.sentence, row.mention_text),
-      }));
-    }
-    enableFilter('Filter these passages…');
-  } catch (err) {
-    console.error(err);
-    renderStreamError();
-  } finally { state.searching = false; }
+  const rows = await loadList(() => db.nameMentions(entity, passageIds));
+  if (!rows) return;
+  group ||= rows[0]?.kind === 'person' ? 'people' : 'orgs';
+  const back = passageIds ? () => browse(group, passageIds) : () => go(`#/${group}`);
+  listHead(`← All ${group === 'people' ? 'people' : 'organizations'}`, back, rows.length, entity);
+  if (!passageIds) {
+    const roles = {};
+    for (const r of rows) if (ROLE_LABEL[r.role]) roles[r.role] = (roles[r.role] || 0) + 1;
+    const notes = [KIND_LABEL[rows[0]?.kind], ...Object.entries(roles).map(([r, n]) => `${ROLE_LABEL[r]} ${n}`)];
+    await profileHead({ t: 'name', key: entity }, entity, notes);
+  }
+  for (const [idx, row] of rows.entries()) {
+    el.stream.appendChild(placeEntry(row, idx, {
+      head: docHead(row),
+      tag: ROLE_LABEL[row.role] ? escapeHtml(ROLE_LABEL[row.role]) : '',
+      quote: { text: row.sentence, mark: row.mention_text },
+    }));
+  }
+  finishList({ t: 'name', key: entity });
 }
 
 async function showCitations(instrument, provision, passageIds) {
-  if (state.searching) return;
+  const rows = await loadList(() => db.authorityCitations(instrument, provision, passageIds, 300));
+  if (!rows) return;
+  const label = `${instrument}${provision ? ` § ${provision}` : ''}`;
+  listHead('← All laws', passageIds ? () => browse('laws', passageIds) : () => go('#/laws'), rows.length, label);
+  if (!passageIds) await profileHead({ t: 'law', key: instrument, sub: provision }, label, []);
+  for (const [idx, row] of rows.entries()) {
+    el.stream.appendChild(placeEntry(row, idx, {
+      head: docHead(row),
+      tag: row.provision ? `§ ${escapeHtml(row.provision)}` : '',
+      quote: { text: row.sentence, mark: row.cite_text },
+    }));
+  }
+  finishList({ t: 'law', key: instrument });
+}
+
+async function showDate(date) {
+  const rows = await loadList(() => db.dateMentions(date));
+  if (!rows) return;
+  const label = formatDate(date, date.length > 7 ? 'day' : 'month');
+  listHead('← Timeline', () => go('#/timeline'), rows.length, label);
+  await profileHead({ t: 'date', key: date }, label, []);
+  for (const [idx, row] of rows.entries()) {
+    el.stream.appendChild(placeEntry(row, idx, { head: docHead(row), quote: { text: row.sentence, mark: row.date_text } }));
+  }
+  finishList({ t: 'date', key: date });
+}
+
+const docHead = (row) => `<h3 class="entry-doc" title="${escapeHtml(row.doc_title)}">${escapeHtml(row.doc_title)}</h3>`;
+
+async function loadList(fetchRows) {
+  if (state.searching || !db.isReady()) return null;
   state.searching = true;
+  setCompact(true);
+  el.summary.hidden = true;
+  setView(null);
   renderStreamLoading();
   try {
-    const rows = await db.authorityCitations(instrument, provision, passageIds);
-    const label = `${instrument}${provision ? ` § ${provision}` : ''}`;
-    el.count.hidden = false;
-    el.count.innerHTML = `<button type="button" class="back-link">← All laws</button> <b>${rows.length} passage${rows.length === 1 ? '' : 's'}</b> · ${escapeHtml(label)}`;
-    el.count.querySelector('.back-link').addEventListener('click', () => browse('laws', passageIds));
-    el.stream.innerHTML = '';
-    for (const [idx, row] of rows.entries()) {
-      el.stream.appendChild(placeEntry(row, idx, {
-        head: `<h3 class="entry-doc" title="${escapeHtml(row.doc_title)}">${escapeHtml(row.doc_title)}</h3>`,
-        tag: row.provision ? `§ ${escapeHtml(row.provision)}` : '',
-        quoteHtml: highlightExactPhrase(row.sentence, row.cite_text),
-      }));
-    }
-    enableFilter('Filter these passages…');
-  } catch (err) {
-    console.error(err);
-    renderStreamError();
-  } finally { state.searching = false; }
+    const rows = await fetchRows();
+    if (rows.length) return rows;
+    el.count.hidden = true;
+    emptyView('Nothing in this dossier matches this link.', 'It may come from another version of the dossier. Search above, or open a list from the cover.');
+  } catch (err) { console.error(err); renderStreamError(); }
+  state.searching = false;
+  return null;
+}
+
+function listHead(backText, back, n, label) {
+  el.count.hidden = false;
+  el.count.innerHTML = `<button type="button" class="back-link">${backText}</button> <b>${n >= 300 ? `First ${n} passages` : `${n} passage${n === 1 ? '' : 's'}`}</b> · ${escapeHtml(label)}`;
+  el.count.querySelector('.back-link').addEventListener('click', back);
+  el.stream.innerHTML = '';
+}
+
+function finishList(subject) {
+  state.searching = false;
+  enableFilter('Filter these passages…');
+  setStatus('Underlined names, laws and dates open everything the record says about them.', false);
+  linkMentions(subject);
+}
+
+/** The top of a person's, organization's, law's or date's page: how much the record says about it,
+ *  and what else is named in the same passages. Appearing together is shown as exactly that. */
+async function profileHead(subject, title, notes) {
+  let info;
+  try { info = await db.related(subject); } catch (err) { console.warn('profile unavailable:', err); return; }
+  const f = info.facts;
+  const span = f.first ? (f.first === f.last ? `in a document dated ${shortDate(f.first)}` : `in documents dated ${shortDate(f.first)} – ${shortDate(f.last)}`) : '';
+  const facts = [...notes.filter(Boolean), `${Number(f.passages)} passage${Number(f.passages) === 1 ? '' : 's'}`,
+    `${Number(f.documents)} document${Number(f.documents) === 1 ? '' : 's'}`, span].filter(Boolean).join(' · ');
+  const group = (label, items, t, text) => (items.length ? `<p class="profile-row"><span class="profile-label">${label}</span>${items.map((i) =>
+    `<a class="ent ent-${t}" href="${linkTo[t](i.key)}">${escapeHtml(text(i))}<span class="profile-n">${Number(i.n)}</span></a>`).join('')}</p>` : '');
+  const rows = group('People', info.people, 'name', (i) => i.key) + group('Organizations', info.orgs, 'name', (i) => i.key)
+    + group('Laws & cases', info.laws, 'law', (i) => i.key) + group('Dates', info.dates, 'date', (i) => formatDate(i.key, i.precision));
+  const box = document.createElement('section');
+  box.className = 'profile';
+  box.innerHTML = `
+    <h2 class="profile-title">${escapeHtml(title)}</h2>
+    <p class="profile-facts">${escapeHtml(facts)}</p>
+    ${rows ? `<h3 class="profile-heading">Also named in these passages</h3>
+    <p class="profile-hint">Numbers count shared passages. Appearing together is not evidence of a relationship — read the passages.</p>${rows}` : ''}`;
+  el.stream.prepend(box);
+}
+
+function shortDate(iso) {
+  const [y, m] = iso.split('-').map(Number);
+  return m ? `${MONTH_NAMES[m - 1].slice(0, 3)} ${y}` : String(y);
 }
 
 // "When…?", "Which law…?" and "Who…?" questions are answered from the build-time tables:

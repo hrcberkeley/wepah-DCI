@@ -23,7 +23,8 @@ be fixed by a profile, and then keep the new step general.
 **Nothing reaches the screen unless it is written on the page.** Every date, citation and name the
 explorer shows keeps the exact words it was found in (`date_text`, `cite_text`, `mention_text`) and the
 sentence around them (`sentence`), both copied verbatim from the passage text, plus the passage's
-highlight box. Language models are allowed to *decide* (keep or drop, which type, are these two the same),
+highlight box and its document's date (`doc_date`, so a profile can say when a name appears).
+Language models are allowed to *decide* (keep or drop, which type, are these two the same),
 never to *write* what is displayed. This is why lawyers can trust a click on any result: it lands on the
 words it claims.
 
@@ -223,3 +224,15 @@ uv run --project ingestion python ingestion/dossier_profile.py  # profile loadin
 ./wehpah eval names                                              # precision and recall
 ./wehpah check                                                   # the whole release
 ```
+
+## Links between names, laws and dates (explorer)
+
+The explorer turns every name, law and date in a shown passage into a link to its own page
+(`#/name/…`, `#/law/…`, `#/date/…`). It needs nothing beyond the three tables: each mention's
+`mention_text` / `cite_text` / `date_text` is verbatim, so the browser finds it in that same passage
+and links it to the row's `entity` / `instrument` / `date` (an acronym such as "PG&E" therefore links
+to Pacific Gas and Electric Company). A page shows how many passages and documents mention the
+subject, the span of their `doc_date`s, and the people, organizations, laws and dates named in the same
+passages, counted by shared passages. The page says that appearing together is not evidence of a
+relationship; keep that wording in any adaptation. Every view has an address, so links can be shared
+and the browser's Back button works. Views of one search's results stay unaddressed (they depend on the search).

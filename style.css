@@ -1047,3 +1047,18 @@ body.compact .home-link { cursor: pointer; }
 #view-filter::placeholder { color: var(--ink-3); font-style: italic; }
 .view-filter-count { flex: none; font: 500 11px/1.4 var(--font-mono); letter-spacing: .06em; text-transform: uppercase; color: var(--ink-3); }
 .entry.filtered-out, .year-rule.filtered-out { display: none; }
+
+/* Names, laws and dates inside passages link to their own page: a quiet dotted rule, gold on hover */
+a.ent { color: inherit; text-decoration: underline dotted var(--line-strong); text-underline-offset: 3px; text-decoration-thickness: 1px; }
+a.ent:hover, a.ent:focus-visible { text-decoration: underline solid var(--gold-deep); text-decoration-thickness: 2px; }
+a.entry-date.ent { color: var(--gold-ink); }
+
+/* A person's, organization's, law's or date's page opens with what the record says about it */
+.profile { padding: 18px 26px 16px; border-bottom: 2.5px solid var(--ink); margin-bottom: 4px; }
+.profile-title { margin: 0; font: 800 26px/1.15 var(--font-display); letter-spacing: -0.02em; color: var(--ink); }
+.profile-facts { margin: 6px 0 0; font: 12px/1.5 var(--font-mono); letter-spacing: 0.05em; text-transform: uppercase; color: var(--ink-2); }
+.profile-heading { margin: 16px 0 2px; font: 600 13px/1.4 var(--font-ui); color: var(--ink); }
+.profile-hint { margin: 0 0 8px; font: italic 14px/1.45 var(--font-serif); color: var(--ink-3); }
+.profile-row { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 14px; margin: 6px 0 0; font: 15px/1.45 var(--font-serif); }
+.profile-label { flex: 0 0 100%; font: 11px/1.4 var(--font-mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-3); }
+.profile-n { margin-left: 4px; font: 11px/1 var(--font-mono); color: var(--ink-3); }
