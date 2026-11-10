@@ -25,7 +25,8 @@ from pathlib import Path
 CONFIG_NAME = "dossier.toml"
 REPO_RE = re.compile(r"^[A-Za-z0-9][\w.-]*/[A-Za-z0-9][\w.-]*$")
 TOP_KEYS = {"title", "description", "pdfs", "output", "cache", "publish_to"}
-SECTIONS = {"filenames": {"title", "date"}, "advanced": {"workers", "full_page_ocr"}}
+SECTIONS = {"filenames": {"title", "date"}, "advanced": {"workers", "full_page_ocr"},
+            "names": {"enabled", "judge", "finder"}}
 
 TEMPLATE = """# WeHPAH! dossier settings. Paths are relative to this file. Only `title` is required.
 title = {title}
@@ -42,6 +43,11 @@ description = {description}
 # [advanced]
 # workers = "auto"             # PDFs read at once; lower it if memory is short
 # full_page_ocr = false        # read every page as an image (slower; for poor scans)
+
+# [names]                      # people and organizations (see docs/PIPELINE.md)
+# enabled = true               # needs an Apple-silicon Mac, or a local model server for the judge
+# judge = "mlx:arthurcollet/Qwen3.6-35B-A3B-mlx-mxfp8"   # or "lmstudio:<model>" / "ollama:<model>"
+# finder = "urchade/gliner_multi-v2.1"                   # GLiNER name-finding model
 """
 
 
@@ -58,6 +64,9 @@ class Settings:
     date_re: re.Pattern | None
     workers: int
     full_page_ocr: bool
+    names_enabled: bool = True
+    names_judge: str = ""
+    names_finder: str = ""
 
 
 def _pattern(value, name):
@@ -94,6 +103,12 @@ def load_settings(root: Path) -> Settings:
     full_page_ocr = advanced.get("full_page_ocr", False)
     if not isinstance(full_page_ocr, bool):
         raise ValueError("[advanced] full_page_ocr must be true or false")
+    names_cfg = data.get("names", {})
+    if not isinstance(names_cfg.get("enabled", True), bool):
+        raise ValueError("[names] enabled must be true or false")
+    judge = str(names_cfg.get("judge", ""))
+    if judge and not re.match(r"^(mlx|lmstudio|ollama):\S+$", judge):
+        raise ValueError('[names] judge must look like "mlx:<model>", "lmstudio:<model>" or "ollama:<model>"')
     default_pdfs = "raw_pdfs" if (root / "raw_pdfs").is_dir() else "."
     resolve = lambda key, default: (root / Path(str(data.get(key) or default)).expanduser()).resolve()
     pdfs, output = resolve("pdfs", default_pdfs), resolve("output", "dist_data")
@@ -104,7 +119,9 @@ def load_settings(root: Path) -> Settings:
                     pdfs=pdfs, output=output,
                     cache=resolve("cache", ".wehpah-cache"), publish_to=publish_to,
                     title_re=_pattern(names.get("title"), "title"), date_re=_pattern(names.get("date"), "date"),
-                    workers=workers, full_page_ocr=full_page_ocr)
+                    workers=workers, full_page_ocr=full_page_ocr,
+                    names_enabled=names_cfg.get("enabled", True), names_judge=judge,
+                    names_finder=str(names_cfg.get("finder", "")))
 
 
 def save_settings(root: Path, **values: str) -> None:

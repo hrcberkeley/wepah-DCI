@@ -126,6 +126,8 @@ async function boot() {
   $('home-link').addEventListener('click', (e) => { e.preventDefault(); goHome(); });
   $('browse-timeline').addEventListener('click', () => browse('timeline', null));
   $('browse-laws').addEventListener('click', () => browse('laws', null));
+  $('browse-people').addEventListener('click', () => browse('people', null));
+  $('browse-orgs').addEventListener('click', () => browse('orgs', null));
   document.querySelectorAll('.view-option').forEach((b) => b.addEventListener('click', () => {
     if (b.dataset.view === 'passages') { renderEvidenceCards(state.lastRows, state.mode, state.lastQuery); setView('passages'); }
     else browse(b.dataset.view, state.lastRows.map((r) => r.passage_id));
@@ -145,6 +147,8 @@ async function boot() {
 
 function updateBrowseLinks() {
   $('browse-links').hidden = !db.hasEntities();
+  for (const id of ['browse-people', 'browse-orgs']) $(id).hidden = !db.hasNames();
+  document.querySelectorAll('.view-option[data-view="people"], .view-option[data-view="orgs"]').forEach((b) => { b.hidden = !db.hasNames(); });
 }
 
 function updateDossierHeading() {
@@ -414,12 +418,14 @@ async function browse(view, passageIds) {
   if (!scoped) { setView(null); state.lastRows = []; }
   else setView(view);
   renderStreamLoading();
-  setStatus(view === 'timeline' ? 'Putting the dated passages in order…' : 'Gathering the laws and cases cited…', true);
+  setStatus({ timeline: 'Putting the dated passages in order…', laws: 'Gathering the laws and cases cited…',
+    people: 'Gathering the people named…', orgs: 'Gathering the organizations named…' }[view], true);
   try {
     if (view === 'timeline') {
       renderTimeline(await db.timeline(passageIds), scoped);
     } else {
-      renderLawIndex(await db.authorityIndex(passageIds), passageIds);
+      if (view === 'laws') renderLawIndex(await db.authorityIndex(passageIds), passageIds);
+      else renderNameIndex(view, await db.nameIndex(view, passageIds), passageIds);
     }
     setStatus('Every date and citation is quoted exactly as written — click one to see its page.', false);
   } catch (err) {
@@ -537,6 +543,57 @@ function renderLawIndex(laws, passageIds) {
   }
 }
 
+const KIND_LABEL = { person: 'Person', government: 'Government', company: 'Company', court: 'Court', organization: 'Organization' };
+
+function renderNameIndex(group, names, passageIds) {
+  const scoped = Array.isArray(passageIds);
+  const noun = group === 'people' ? ['person', 'people'] : ['organization', 'organizations'];
+  el.count.hidden = false;
+  el.count.innerHTML = `<b>${names.length} ${names.length === 1 ? noun[0] : noun[1]} named</b> · ${scopeLabel(scoped)}`;
+  backLink(scoped);
+  if (!names.length) return emptyView(`No ${noun[1]} are named in these passages.`, `Open “${group === 'people' ? 'People' : 'Organizations'}” on the cover to see the whole dossier.`);
+  el.stream.innerHTML = '';
+  for (const [idx, n] of names.entries()) {
+    const item = document.createElement('article');
+    item.className = 'entry law-entry';
+    item.style.setProperty('--i', Math.min(idx, 20));
+    const roles = Array.from(n.roles ?? []).map((r) => ROLE_LABEL[r]).filter(Boolean);
+    const notes = [group === 'orgs' ? KIND_LABEL[n.kind] : '', n.defined_as ? `the ${n.defined_as.split(',').join(' / ')}` : '', roles.length ? roles.join(' · ') : '']
+      .filter(Boolean).join(' · ');
+    item.innerHTML = `
+      <header class="entry-head">
+        <h3 class="entry-doc" title="${escapeHtml(n.entity)}">${escapeHtml(n.entity)}</h3>
+        <span class="entry-tag tag-related">${Number(n.mentions)} mention${Number(n.mentions) === 1 ? '' : 's'} · ${Number(n.documents)} doc${Number(n.documents) === 1 ? '' : 's'}</span>
+      </header>
+      ${notes ? `<p class="entry-meta">${escapeHtml(notes)}</p>` : ''}`;
+    item.addEventListener('click', () => showMentions(group, n.entity, passageIds));
+    el.stream.appendChild(item);
+  }
+}
+
+async function showMentions(group, entity, passageIds) {
+  if (state.searching) return;
+  state.searching = true;
+  renderStreamLoading();
+  try {
+    const rows = await db.nameMentions(entity, passageIds);
+    el.count.hidden = false;
+    el.count.innerHTML = `<button type="button" class="back-link">← All ${group === 'people' ? 'people' : 'organizations'}</button> <b>${rows.length} passage${rows.length === 1 ? '' : 's'}</b> · ${escapeHtml(entity)}`;
+    el.count.querySelector('.back-link').addEventListener('click', () => browse(group, passageIds));
+    el.stream.innerHTML = '';
+    for (const [idx, row] of rows.entries()) {
+      el.stream.appendChild(placeEntry(row, idx, {
+        head: `<h3 class="entry-doc" title="${escapeHtml(row.doc_title)}">${escapeHtml(row.doc_title)}</h3>`,
+        tag: ROLE_LABEL[row.role] ? escapeHtml(ROLE_LABEL[row.role]) : '',
+        quoteHtml: highlightExactPhrase(row.sentence, row.mention_text),
+      }));
+    }
+  } catch (err) {
+    console.error(err);
+    renderStreamError();
+  } finally { state.searching = false; }
+}
+
 async function showCitations(instrument, provision, passageIds) {
   if (state.searching) return;
   state.searching = true;
@@ -561,43 +618,67 @@ async function showCitations(instrument, provision, passageIds) {
   } finally { state.searching = false; }
 }
 
-// "When did…?" and "Which law…?" questions are answered from the same tables:
-// dates and citations found in the passages closest to the question, best match first.
+// "When…?", "Which law…?" and "Who…?" questions are answered from the build-time tables:
+// dates, citations and names found in the passages closest to the question, best match first.
 const WHEN_RE = /^\s*(when\b|what (date|day|year|month)\b|on what date|by what date|since when|how long ago)/i;
 const LAW_RE = /\b(which|what) (laws?|statutes?|regulations?|codes?|acts?|sections?|cases?|rules?|authorit(y|ies))\b/i;
+const WHO_RE = /^\s*(who\b|whom\b|whose\b|(which|what) (person|people|individuals?|agenc(y|ies)|compan(y|ies)|organi[sz]ations?|groups?|firms?|consultants?)\b)/i;
+
+const ROLE_LABEL = { author: 'wrote', recipient: 'addressed to', signer: 'signed' };
+
+const ENTITY_ANSWERS = {
+  when: {
+    ready: () => db.hasEntities(),
+    find: (ids) => db.timeline(ids),
+    title: 'Dates from the Record', noun: 'Dates',
+    label: (f) => formatDate(f.date, f.precision), mark: (f) => f.date_text, one: () => '',
+    status: 'Dates are quoted exactly as written. If documents disagree, each version is listed.',
+  },
+  law: {
+    ready: () => db.hasEntities(),
+    find: async (ids) => (await Promise.all((await db.authorityIndex(ids, 12)).map((l) => db.authorityCitations(l.instrument, '', ids, 3)))).flat(),
+    title: 'Laws and Cases from the Record', noun: 'Citations',
+    label: (f) => `${f.instrument}${f.provision ? ` § ${f.provision}` : ''}`, mark: (f) => f.cite_text, one: (f) => f.instrument,
+    status: 'Citations are quoted exactly as written — click one to see its page.',
+  },
+  who: {
+    ready: () => db.hasNames(),
+    find: async (ids) => {
+      const names = [...await db.nameIndex('people', ids, 10), ...await db.nameIndex('orgs', ids, 10)];
+      return (await Promise.all(names.map((n) => db.nameMentions(n.entity, ids, 3)))).flat();
+    },
+    title: 'People and Organizations from the Record', noun: 'Names',
+    label: (f) => `${f.entity}${ROLE_LABEL[f.role] ? ` · ${ROLE_LABEL[f.role]}` : ''}`, mark: (f) => f.mention_text, one: (f) => f.entity,
+    status: 'Names are quoted exactly as written — click one to see its page.',
+  },
+};
 
 async function answerFromEntities(query, ranked) {
-  const kind = WHEN_RE.test(query) ? 'when' : LAW_RE.test(query) ? 'law' : null;
-  if (!kind || !db.hasEntities()) return false;
+  const kind = WHEN_RE.test(query) ? 'when' : LAW_RE.test(query) ? 'law' : WHO_RE.test(query) ? 'who' : null;
+  const spec = ENTITY_ANSWERS[kind];
+  if (!spec || !spec.ready()) return false;
   const top = ranked.slice(0, 40);
   const rank = new Map(top.map((r, i) => [r.passage_id, i]));
-  const ids = top.map((r) => r.passage_id);
-  let found = kind === 'when'
-    ? await db.timeline(ids)
-    : (await Promise.all((await db.authorityIndex(ids, 12)).map((l) => db.authorityCitations(l.instrument, '', ids, 3)))).flat();
   // Same exact-quote gate as every other answer line.
-  found = found.filter((f) => rank.has(f.passage_id)
-    && verifier.isGrounded(f.sentence, top[rank.get(f.passage_id)].passage_text))
+  let found = (await spec.find(top.map((r) => r.passage_id)))
+    .filter((f) => rank.has(f.passage_id) && verifier.isGrounded(f.sentence, top[rank.get(f.passage_id)].passage_text))
     .sort((a, b) => rank.get(a.passage_id) - rank.get(b.passage_id));
-  if (kind === 'law') {
-    const seen = new Set();
-    found = found.filter((f) => !seen.has(f.instrument) && seen.add(f.instrument));
-  }
+  const seen = new Set();
+  found = found.filter((f) => !spec.one(f) || (!seen.has(spec.one(f)) && seen.add(spec.one(f))));
   if (!found.length) return false;
   found = found.slice(0, 8);
 
   renderEvidenceCards(top.filter((r) => found.some((f) => f.passage_id === r.passage_id)), 'dossier', query);
   el.summary.innerHTML = `
-    <h2>${kind === 'when' ? 'Dates from the Record' : 'Laws and Cases from the Record'}</h2>
+    <h2>${spec.title}</h2>
     <p class="dossier-q">For “${escapeHtml(query)}”</p>
     <ol id="claim-list"></ol>
-    <p class="dossier-coverage">${kind === 'when' ? 'Dates' : 'Citations'} found in the ${top.length} passages closest to your question, closest first</p>`;
+    <p class="dossier-coverage">${spec.noun} found in the ${top.length} passages closest to your question, closest first</p>`;
   const list = el.summary.querySelector('#claim-list');
   for (const f of found) {
     const li = document.createElement('li');
     li.className = 'claim-row';
-    const label = kind === 'when' ? formatDate(f.date, f.precision) : `${f.instrument}${f.provision ? ` § ${f.provision}` : ''}`;
-    li.innerHTML = `<span class="claim-text"><b class="claim-key">${escapeHtml(label)}</b> — ${highlightExactPhrase(f.sentence, kind === 'when' ? f.date_text : f.cite_text)}</span>`;
+    li.innerHTML = `<span class="claim-text"><b class="claim-key">${escapeHtml(spec.label(f))}</b> — ${highlightExactPhrase(f.sentence, spec.mark(f))}</span>`;
     const pill = document.createElement('button');
     pill.type = 'button';
     pill.className = 'verify-pill';
@@ -608,9 +689,7 @@ async function answerFromEntities(query, ranked) {
     list.appendChild(li);
   }
   el.summary.hidden = false;
-  setStatus(kind === 'when'
-    ? 'Dates are quoted exactly as written. If documents disagree, each version is listed.'
-    : 'Citations are quoted exactly as written — click one to see its page.', false);
+  setStatus(spec.status, false);
   return true;
 }
 

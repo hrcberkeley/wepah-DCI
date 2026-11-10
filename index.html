@@ -71,7 +71,9 @@
             <p id="helper-copy" class="helper-copy"><em>Finds documents containing your exact words, just like Ctrl+F across every file at once.</em></p>
             <p id="browse-links" class="browse-links" hidden>Or browse the whole dossier:
               <button id="browse-timeline" type="button">Timeline</button>
-              <button id="browse-laws" type="button">Laws &amp; cases cited</button></p>
+              <button id="browse-laws" type="button">Laws &amp; cases cited</button>
+              <button id="browse-people" type="button" hidden>People</button>
+              <button id="browse-orgs" type="button" hidden>Organizations</button></p>
           </div>
 
           <button id="expand-header" class="expand-header" type="button" aria-label="Expand search cover" title="Back to the full search cover" aria-expanded="false">
@@ -95,6 +97,8 @@
             <button type="button" class="view-option" data-view="passages" aria-pressed="true">Passages</button>
             <button type="button" class="view-option" data-view="timeline" aria-pressed="false">Timeline</button>
             <button type="button" class="view-option" data-view="laws" aria-pressed="false">Laws cited</button>
+            <button type="button" class="view-option" data-view="people" aria-pressed="false" hidden>People</button>
+            <button type="button" class="view-option" data-view="orgs" aria-pressed="false" hidden>Organizations</button>
           </div>
         </div>
         <div id="dossier-summary" class="dossier-summary" hidden></div>

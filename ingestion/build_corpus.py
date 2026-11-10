@@ -639,6 +639,35 @@ def stage_entities(all_rows: list[dict], out_dir: Path) -> dict:
     return {"event_count": len(events), "authority_count": len(authorities)}
 
 
+def stage_names(all_rows: list[dict], out_dir: Path, settings) -> dict:
+    """People and organizations -> names.parquet (see names.py and docs/PIPELINE.md)."""
+    import duckdb
+    import pyarrow as pa
+    import names
+
+    if not settings.names_enabled:
+        print("[names] skipped: turned off in dossier.toml ([names] enabled = false)", flush=True)
+        return {}
+    judge = settings.names_judge or names.JUDGE_DEFAULT
+    if judge.startswith("mlx:"):
+        try:
+            import mlx_lm  # noqa: F401
+        except ImportError:
+            print("[names] skipped: the judge model needs an Apple-silicon Mac, or set [names] judge to a "
+                  "local model server (see docs/PIPELINE.md)", flush=True)
+            return {}
+    rows = names.extract(all_rows, settings.cache, judge, settings.names_finder or names.GLINER_MODEL)
+    if not rows:
+        return {}
+    con = duckdb.connect(":memory:")
+    con.register("t", pa.Table.from_pylist(rows))
+    safe = (out_dir / "names.parquet").as_posix().replace("'", "''")
+    con.execute(f"COPY (SELECT * FROM t ORDER BY kind, entity, doc_id, page_number, passage_id) TO '{safe}' (FORMAT PARQUET, ROW_GROUP_SIZE 2000, COMPRESSION ZSTD)")
+    con.close()
+    return {"names_path": "names.parquet", "name_mention_count": len(rows),
+            "name_count": len({(r["kind"], r["entity"]) for r in rows})}
+
+
 def verify_shards(con, shard_dir: Path, expected_rows: int) -> None:
     """Check every shard against the corpus before a release is published."""
     expected = {int(row[0]): int(row[1]) for row in con.execute(
@@ -698,10 +727,10 @@ def verify_corpus(out_dir: Path) -> dict:
             raise ValueError("Unsupported cluster shard path")
         verify_shards(con, out_dir / "clusters", n)
     assert n > 0, "corpus.parquet is empty"
-    for key in ("events_path", "authorities_path"):
+    for key in ("events_path", "authorities_path", "names_path"):
         if key in manifest:
             path = out_dir / manifest[key]
-            if manifest[key] not in ("events.parquet", "authorities.parquet") or not path.is_file():
+            if manifest[key] not in ("events.parquet", "authorities.parquet", "names.parquet") or not path.is_file():
                 raise ValueError(f"The release is missing {manifest[key]}")
             safe = path.as_posix().replace("'", "''")
             orphans = con.execute(f"SELECT COUNT(*) FROM read_parquet('{safe}') e ANTI JOIN corpus c USING (passage_id)").fetchone()[0]
@@ -816,6 +845,7 @@ def build(settings, limit: int = 0, force: bool = False, workers: int | None = N
         model_revision = stage_embed_and_cluster(all_rows, staging, settings.cache)
         stage_export(all_rows, staging)
         entity_counts = stage_entities(all_rows, staging)
+        entity_counts.update(stage_names(all_rows, staging, settings))
         empty_pages = pages_without_text(extracted)
         manifest = {
             "schema_version": 1, "title": settings.title, "description": settings.description,

@@ -50,13 +50,24 @@ date = '^TN\d+_(\d{8})T'       # must capture YYYYMMDD
 [advanced]                     # optional
 workers = "auto"               # PDFs read at once; lower it if memory is short
 full_page_ocr = false          # read every page as an image (slower; for poor scans)
+
+[names]                        # optional: people and organizations
+enabled = true
+judge = "mlx:arthurcollet/Qwen3.6-35B-A3B-mlx-mxfp8"   # or "lmstudio:<model>" / "ollama:<model>"
+finder = "urchade/gliner_multi-v2.1"
 ```
+
+The `[names]` step needs an Apple-silicon Mac for `mlx:` models, or LM Studio / Ollama running locally; without either it is skipped and the rest of the release is built as usual. How the defaults were chosen, and how to compare models on your own machine, is in [docs/PIPELINE.md](../docs/PIPELINE.md).
 
 Paths are relative to the file. Unknown keys and malformed patterns stop with a clear message instead of being silently ignored. Without filename patterns, the title is the file name and the date comes from the PDF's own metadata, or "Undated".
 
 ## Preparing the PDFs
 
 Put every source PDF in the PDF folder and keep the originals there; the builder copies them into the release. Give files distinct, stable names: two names that simplify to the same document ID (for example `A B.pdf` and `A-B.pdf`) stop the build with a clear error. Make sure there is room for a second copy of the PDFs. The first run downloads text-recognition and search models and takes much longer than later runs.
+
+## What the build produces beyond search
+
+Besides the searchable passages, every build writes three tables the explorer uses for its Timeline, Laws & cases cited, People and Organizations views, and for "when…?", "which law…?" and "who…?" questions: `events.parquet` (dates), `authorities.parquet` (laws, regulations, cases) and `names.parquet` (people and organizations). Every row keeps the exact words and sentence it was found in. What each finds, what it deliberately leaves out, and how to adapt it to another jurisdiction is in [docs/PIPELINE.md](../docs/PIPELINE.md).
 
 ## What the build guarantees
 
@@ -76,6 +87,15 @@ Open a published dossier with the explorer's dossier switcher or by adding `?rep
 
 ```sh
 uv run --project ingestion python -m unittest discover -s ingestion/tests -v
+uv run --project ingestion python ingestion/entities.py     # dates and laws self-check
+uv run --project ingestion python ingestion/names.py        # people and organizations self-check
+```
+
+Quality tools for the people and organizations step (see [docs/PIPELINE.md](../docs/PIPELINE.md)):
+
+```sh
+uv run --project ingestion python ingestion/tests/judge_eval.py <model spec> …          # compare judge models
+uv run --project ingestion python ingestion/tests/names_eval.py dist_data/names.parquet  # precision and recall
 ```
 
 The older entry point `uv run --project ingestion python ingestion/build_corpus.py [--verify-only]` still works and forwards to `wehpah build` / `wehpah check`.

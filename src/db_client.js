@@ -444,6 +444,38 @@ export async function authorityCitations(instrument, provision = '', passageIds 
     ) WHERE rn = 1 ORDER BY doc_id, page_number, passage_id LIMIT ${Math.trunc(limit)};`));
 }
 
+// ---------- people & organizations (built by ingestion/names.py) ----------
+export function hasNames() { return !!activeDossier?.names_path; }
+
+function kindFilter(group) { return group === 'people' ? "kind = 'person'" : "kind <> 'person'"; }
+
+/** People or organizations with mention and document counts, and the roles they appear in. */
+export async function nameIndex(group, passageIds = null, limit = 5000) {
+  if (!hasNames() || (passageIds && !passageIds.length)) return [];
+  const file = await registerParquet(dataUrl(activeDossier.names_path));
+  const where = [kindFilter(group)];
+  if (passageIds) where.push(`passage_id IN (${idList(passageIds)})`);
+  return rowsToObjects(await runQuery(`
+    SELECT entity, any_value(kind) AS kind, count(*) AS mentions, count(DISTINCT doc_id) AS documents,
+           list(DISTINCT role ORDER BY role) FILTER (WHERE role <> '') AS roles,
+           max(defined_as) AS defined_as
+    FROM read_parquet('${file}') WHERE ${where.join(' AND ')}
+    GROUP BY entity ORDER BY documents DESC, mentions DESC, entity LIMIT ${Math.trunc(limit)};`));
+}
+
+/** Every mention of one person or organization, one per passage. */
+export async function nameMentions(entity, passageIds = null, limit = 300) {
+  if (!hasNames()) return [];
+  const file = await registerParquet(dataUrl(activeDossier.names_path));
+  const where = [`entity = ${sqlString(entity)}`];
+  if (passageIds) where.push(passageIds.length ? `passage_id IN (${idList(passageIds)})` : 'false');
+  return rowsToObjects(await runQuery(`
+    SELECT entity, kind, role, mention_text, ${PLACE_COLUMNS} FROM (
+      SELECT *, row_number() OVER (PARTITION BY passage_id ORDER BY role DESC) AS rn
+      FROM read_parquet('${file}') WHERE ${where.join(' AND ')}
+    ) WHERE rn = 1 ORDER BY role = '' , doc_id, page_number, passage_id LIMIT ${Math.trunc(limit)};`));
+}
+
 // ---------- helpers ----------
 /** Escape a JS string as a DuckDB string literal. */
 function sqlString(s) {

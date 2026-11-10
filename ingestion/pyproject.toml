@@ -13,4 +13,6 @@ dependencies = [
     "huggingface_hub>=0.26",
     "pyarrow>=17.0",
     "eyecite>=2.7.8",
+    "gliner>=0.2.30",
+    "mlx-lm>=0.32.2",
 ]
