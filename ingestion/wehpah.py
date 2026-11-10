@@ -239,6 +239,7 @@ def main(argv: list[str] | None = None) -> None:
                    help="names: precision/recall · judge: compare models · sample: passages to label · add-labels: keep them")
     e.add_argument("models", nargs="*", help="for `judge`: model specs such as mlx:<repo> lmstudio:<model> ollama:<model>")
     e.add_argument("--n", type=int, default=30, help="for `sample`: how many passages")
+    ap.set_defaults(port=8410, no_browser=False)  # bare `./wehpah` opens the Studio with no subcommand
     args = ap.parse_args(argv)
 
     root = Path(args.dir).resolve()

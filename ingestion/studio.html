@@ -161,6 +161,11 @@
     </div>
     <div id="publish-box" style="margin-top:22px">
       <p class="help" id="publish-help"></p>
+      <div id="key-box" hidden>
+        <p class="help">Paste a Hugging Face key with write access (<a href="https://huggingface.co/settings/tokens" target="_blank" rel="noopener">create one here</a>). It is saved only on this computer.</p>
+        <div class="row"><input type="password" id="hf-key" autocomplete="off" placeholder="hf_…" /><button class="ghost" id="save-key">Save key</button></div>
+        <p class="status" id="key-status"></p>
+      </div>
       <label class="check"><input type="checkbox" id="confirm" /> <span id="confirm-text">I confirm these PDFs and their text may be made public.</span></label>
       <div class="row" style="margin-top:14px"><button id="publish">Publish</button></div>
       <p class="status" id="publish-status"></p>
@@ -231,11 +236,12 @@ function renderRelease() {
   if (!r) blockers.push('build the dossier');
   if (r?.trial_limit) blockers.push('build all PDFs');
   if (!s.publish_to) blockers.push('enter a Hugging Face dataset above and save');
-  if (!state.signed_in) blockers.push('sign in by running ./wehpah login in a terminal, then reload this page');
+  if (!state.signed_in) blockers.push('add your Hugging Face key below');
   $('publish-help').innerHTML = blockers.length
     ? `Before publishing: ${blockers.map(esc).join('; ')}.`
     : `Publishing uploads the release to <strong>huggingface.co/datasets/${esc(s.publish_to)}</strong>. Anyone with the link can then read every PDF and its extracted text.`;
   $('confirm-text').textContent = r ? `I confirm these ${r.documents.toLocaleString()} PDFs and their text may be made public.` : 'I confirm these PDFs and their text may be made public.';
+  $('key-box').hidden = !!state.signed_in;
   blocked = blockers.length > 0;
   updateButtons();
 }
@@ -376,11 +382,30 @@ window.addEventListener('drop', (e) => e.preventDefault());
 
 $('build').addEventListener('click', () => start('/api/build', { force: $('force').checked }));
 $('confirm').addEventListener('change', () => updateButtons());
+$('save-key').addEventListener('click', async () => {
+  $('key-status').textContent = 'Checking…';
+  try {
+    const r = await api('/api/login', { token: $('hf-key').value });
+    $('hf-key').value = '';
+    $('key-status').textContent = `Signed in as ${r.user}.`;
+    await refresh();
+  } catch (e) { $('key-status').textContent = e.message; }
+});
 $('publish').addEventListener('click', () => { $('confirm').checked && start('/api/publish', { confirm: true }); $('confirm').checked = false; });
 
 await refresh();
 const current = await api('/api/job?since=0');
 if (current.job) { if (current.running) poll(); }
+</script>
+<script>
+// Local use only: tell the WeHPAH! launcher this window is open, so it can quit when the window closes.
+if (["127.0.0.1", "localhost"].includes(location.hostname)) {
+  const id = Math.random().toString(36).slice(2);
+  const ping = (bye) => fetch(`/api/ping?id=${id}${bye ? "&bye=1" : ""}`, { keepalive: true }).catch(() => {});
+  ping(); setInterval(ping, 5000);
+  addEventListener("pagehide", () => ping(true));
+  addEventListener("pageshow", (e) => e.persisted && ping());
+}
 </script>
 </body>
 </html>

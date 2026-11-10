@@ -9,6 +9,7 @@ page plus its small JSON API. It listens on 127.0.0.1 only.
 
 from __future__ import annotations
 
+import errno
 import http.server
 import json
 import os
@@ -16,6 +17,7 @@ import re
 import subprocess
 import sys
 import threading
+import time
 import urllib.parse
 import webbrowser
 from pathlib import Path
@@ -175,6 +177,10 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         route = urllib.parse.urlsplit(self.path)
         if route.path.startswith("/api/") and not self.local_host():
             return self.send_json({"error": "Forbidden"}, 403)
+        if route.path == "/api/ping":
+            q = urllib.parse.parse_qs(route.query)
+            self.server.windows.note((q.get("id") or ["?"])[0], bool(q.get("bye")))
+            return self.send_json({"ok": True})
         if route.path == "/api/state":
             return self.send_json(studio_state(self.server.root))
         if route.path == "/api/job":
@@ -243,6 +249,21 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             except (ValueError, OSError) as exc:
                 return self.send_json({"error": str(exc)}, 400)
             return self.send_json({"ok": True, "moved_to": where})
+        if path == "/api/login":
+            # The key is checked with Hugging Face, saved where `./wehpah login` saves it, and never sent back.
+            token = str(body.get("token", "")).strip()
+            try:
+                from huggingface_hub import HfApi, login
+                who = HfApi().whoami(token=token)
+                role = (who.get("auth") or {}).get("accessToken", {}).get("role")
+                if role == "read":
+                    raise ValueError("That key can only read. Create a key with write access and try again.")
+                login(token=token, add_to_git_credential=False)
+            except ValueError as exc:
+                return self.send_json({"error": str(exc)}, 400)
+            except Exception:
+                return self.send_json({"error": "Hugging Face did not accept that key."}, 400)
+            return self.send_json({"ok": True, "user": who.get("name", "")})
         if path == "/api/choose-folder":
             return self.send_json({"folder": choose_folder(self.pdf_dir())})
         if path == "/api/open-folder":
@@ -363,11 +384,49 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         sys.stderr.write("%s - %s%s\n" % (self.address_string(), fmt % args, f"  [Range: {r}]" if r else ""))
 
 
+class Windows:
+    """Which browser windows are open. A window pings every few seconds and says goodbye on close."""
+    STALE = 90   # seconds without a ping (hidden tabs are throttled, a crash never says goodbye)
+    GRACE = 4    # seconds to wait after the last goodbye: a reload or a link to another page pings again
+
+    def __init__(self):
+        self.seen: dict[str, float] = {}   # window id -> last ping
+        self.ever = False                  # never quit before a window has opened
+        self.empty_since = 0.0
+
+    def note(self, wid: str, bye: bool) -> None:
+        now = time.monotonic()
+        if bye:
+            self.seen.pop(wid, None)
+        else:
+            self.seen[wid], self.ever = now, True
+        if not self.seen:
+            self.empty_since = now
+
+    def gone(self) -> bool:
+        now = time.monotonic()
+        self.seen = {w: t for w, t in self.seen.items() if now - t < self.STALE}
+        if not self.ever or self.seen:
+            return False
+        return now - max(self.empty_since, 0) > self.GRACE
+
+
 def serve(root: Path, port: int = 8410, open_path: str = "/studio", open_browser: bool = True) -> None:
     sys.path.insert(0, str(INGESTION_DIR))
     import wehpah
-    server = http.server.ThreadingHTTPServer(("127.0.0.1", port), Handler)
-    server.root, server.job = root, None
+    for candidate in range(port, port + 20):  # port busy (often an earlier ./wehpah still running): try the next
+        try:
+            server = http.server.ThreadingHTTPServer(("127.0.0.1", candidate), Handler)
+            break
+        except OSError as exc:
+            if exc.errno != errno.EADDRINUSE:
+                raise
+    else:
+        raise SystemExit(f"Ports {port}-{port + 19} are all busy. Stop the other WeHPAH! (Ctrl+C in its window) or pass --port.")
+    if candidate != port:
+        print(f"Port {port} is busy (another WeHPAH! may already be running); using {candidate} instead.")
+    port = candidate
+    server.root, server.job, server.windows = root, None, Windows()
     try:
         server.output = wehpah.load_settings(root).output
     except Exception:
@@ -376,9 +435,18 @@ def serve(root: Path, port: int = 8410, open_path: str = "/studio", open_browser
     print(f"WeHPAH! Studio  : http://127.0.0.1:{port}/studio")
     print(f"Local preview   : http://127.0.0.1:{port}/?local")
     print(f"Release folder  : {server.output}")
-    print("Ctrl+C to stop.")
+    print("Ctrl+C to stop (it also stops when you close the browser window).")
     if open_browser:
         threading.Timer(0.5, webbrowser.open, [url]).start()
+    def quit_when_closed():
+        while True:
+            time.sleep(1)
+            busy = server.job and server.job.running  # never stop in the middle of a build or publish
+            if server.windows.gone() and not busy:
+                print("Browser window closed; stopping WeHPAH!.")
+                server.shutdown()
+                return
+    threading.Thread(target=quit_when_closed, daemon=True).start()
     try:
         server.serve_forever()
     except KeyboardInterrupt:

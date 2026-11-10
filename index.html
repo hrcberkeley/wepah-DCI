@@ -156,5 +156,15 @@
   </div>
 
   <script type="module" src="./src/main.js"></script>
+<script>
+// Local use only: tell the WeHPAH! launcher this window is open, so it can quit when the window closes.
+if (["127.0.0.1", "localhost"].includes(location.hostname)) {
+  const id = Math.random().toString(36).slice(2);
+  const ping = (bye) => fetch(`/api/ping?id=${id}${bye ? "&bye=1" : ""}`, { keepalive: true }).catch(() => {});
+  ping(); setInterval(ping, 5000);
+  addEventListener("pagehide", () => ping(true));
+  addEventListener("pageshow", (e) => e.persisted && ping());
+}
+</script>
 </body>
 </html>
