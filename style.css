@@ -462,6 +462,8 @@ body.compact .expand-header { width: 34px; opacity: 1; pointer-events: auto; }
 
 /* Mode 3 stays labeled as experimental inside the compact strip too */
 body.compact .experimental-warning { flex: none; padding: 4px 10px; font-size: 9.5px; }
+/* the strip has room for the label only; the cover shows the full sentence */
+body.compact .warn-more { display: none; }
 
 /* ============================================================
    WORKSPACE — evidence stream 2fr · grounding stage 3fr
@@ -725,7 +727,7 @@ mark.exact-hit {
 .verify-pill[data-quote]:focus-visible::after {
   content: "“" attr(data-quote) "”";
   position: absolute;
-  right: 0;
+  left: 0; /* grows rightward into the pane, never off the left edge of the window */
   top: calc(100% + 8px);
   z-index: 30;
   width: min(340px, 78vw);
