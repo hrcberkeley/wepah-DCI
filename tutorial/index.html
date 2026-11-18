@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>WeHPAH! Tutorial</title>
+  <meta name="description" content="Learn WeHPAH! step by step by tracing how Microsoft's San José data center moved through the City of San José and the California Energy Commission." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="stylesheet"
+        href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;600&family=Bricolage+Grotesque:opsz,wght@12..96,800&family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,600;1,8..60,400&family=Spline+Sans+Mono:wght@400;500&display=swap" />
+  <style>
+    :root {
+      --paper: #F7F1E6; --paper-deep: #EEE6D4; --plate: #FFFFFF;
+      --ink: #211B12; --ink-2: #5F574A; --ink-3: #6E6455;
+      --line: rgba(33, 27, 18, 0.16);
+      --gold: #FDB515; --gold-deep: #D99A00; --gold-ink: #7A5200; --gold-mark: rgba(253, 181, 21, 0.42);
+      --shadow-plate: 0 0 0 1px rgba(33, 27, 18, 0.22), 0 22px 44px -26px rgba(33, 27, 18, 0.42);
+    }
+    * { box-sizing: border-box; }
+    ::selection { background: var(--gold-mark); }
+    body { margin: 0; background: var(--paper); color: var(--ink); font: 17px/1.62 'Source Serif 4', Georgia, serif; }
+    main { max-width: 760px; margin: 0 auto; padding: 48px 16px 96px; }
+    a { color: var(--ink); text-decoration-color: var(--gold-deep); text-underline-offset: 3px; }
+    a:hover { background: var(--gold-mark); }
+    a:focus-visible { outline: 2px solid var(--gold-deep); outline-offset: 2px; }
+    .kicker, .meta, figcaption, th, .step-no { font-family: 'Spline Sans Mono', ui-monospace, monospace; letter-spacing: .06em; text-transform: uppercase; }
+    .kicker { font-size: 13px; color: var(--ink-2); margin: 0; }
+    h1 { font: 800 clamp(36px, 7vw, 56px)/1.05 'Bricolage Grotesque', sans-serif; letter-spacing: -0.03em; margin: 12px 0 16px; }
+    h1 .bang { color: var(--gold-ink); }
+    h2 { font: 800 28px/1.2 'Bricolage Grotesque', sans-serif; letter-spacing: -0.02em; margin: 64px 0 12px; padding-top: 12px; border-top: 2.5px solid var(--ink); }
+    h3 { font: 600 18px/1.35 Archivo, sans-serif; margin: 28px 0 6px; }
+    .step-no { display: block; font-size: 13px; font-weight: 500; color: var(--gold-ink); margin-bottom: 4px; }
+    .lede { font-size: 20px; font-style: italic; color: var(--ink-2); }
+    .meta { font-size: 12px; color: var(--ink-3); }
+    figure { margin: 24px -8px; }
+    figure img { display: block; width: 100%; height: auto; border-radius: 3px; box-shadow: var(--shadow-plate); background: var(--plate); }
+    figcaption { margin-top: 10px; font-size: 12px; line-height: 1.5; color: var(--ink-3); text-transform: none; letter-spacing: .01em; }
+    @media (min-width: 1000px) { figure { margin: 28px -120px; } }
+    .note, .found { margin: 20px 0; padding: 14px 18px; background: var(--plate); box-shadow: var(--shadow-plate); border-radius: 3px; }
+    .note { border-left: 4px solid var(--ink); }
+    .found { border-left: 4px solid var(--gold); }
+    .note p, .found p { margin: 0; }
+    .note strong, .found strong { font-family: Archivo, sans-serif; }
+    mark { background: var(--gold-mark); color: inherit; padding: 0 2px; }
+    kbd { font: 14px 'Spline Sans Mono', monospace; border: 1px solid var(--line); border-radius: 3px; padding: 0 5px; background: var(--plate); }
+    ol, ul { padding-left: 24px; }
+    li { margin: 6px 0; }
+    .table-wrap { overflow-x: auto; margin: 20px 0; }
+    table { width: 100%; border-collapse: collapse; font-size: 16px; }
+    th { text-align: left; font-size: 12px; color: var(--ink-2); font-weight: 500; border-bottom: 2.5px solid var(--ink); padding: 6px 8px; }
+    td { vertical-align: top; border-bottom: 1px solid var(--line); padding: 10px 8px; }
+    td:first-child { white-space: nowrap; font: 500 14px/1.6 'Spline Sans Mono', monospace; color: var(--gold-ink); }
+    .toc { columns: 2 240px; font-family: Archivo, sans-serif; font-size: 15px; }
+    .back { font: 500 13px 'Spline Sans Mono', monospace; text-transform: uppercase; letter-spacing: .06em; }
+  </style>
+</head>
+<body>
+<main>
+  <p class="back"><a href="../">← Open WeHPAH!</a></p>
+  <p class="kicker">The Investigations Lab · Tutorial</p>
+  <h1>How to use WeHPAH<span class="bang">!</span></h1>
+  <p class="lede">This tutorial teaches every part of WeHPAH! through one real question: how did Microsoft's data center in San José get approved?</p>
+  <p class="meta">Dossier: Microsoft Datacenter Dossier · 283 documents · Screenshots taken November 2026</p>
+
+  <p>WeHPAH! searches a collection of public documents, which we call a <em>dossier</em>. Every result leads back to the original page, and a gold box marks the exact words. You never need to trust a summary: you can always read the source.</p>
+  <p>In this tutorial, you follow the planning record for Microsoft's San José data center, which the documents call <em>SJC02</em> or the <em>San Jose City Data Center</em>. The site sits at 1657 Alviso-Milpitas Road. As you learn each tool, you also uncover one part of the story. The last section puts the whole timeline together.</p>
+  <p>You only need a web browser. You do not need to install anything or create an account.</p>
+
+  <nav class="toc" aria-label="Steps">
+    <ol>
+      <li><a href="#open">Open the site and choose a dossier</a></li>
+      <li><a href="#exact">Find exact words</a></li>
+      <li><a href="#page">Check the original page</a></li>
+      <li><a href="#concepts">Explore concepts</a></li>
+      <li><a href="#timeline">Put your results in order</a></li>
+      <li><a href="#ask">Ask the dossier a question</a></li>
+      <li><a href="#date">Open everything about one day</a></li>
+      <li><a href="#laws">Browse the laws and cases cited</a></li>
+      <li><a href="#people">Follow a person or an organization</a></li>
+      <li><a href="#share">Share what you found</a></li>
+      <li><a href="#story">What the record shows</a></li>
+    </ol>
+  </nav>
+
+  <h2 id="open"><span class="step-no">Step 1</span>Open the site and choose a dossier</h2>
+  <p>Go to <a href="../">hrcberkeley.github.io/wepah-DCI</a>. The cover page shows the name of the open dossier and counts its documents and passages. A <em>passage</em> is a paragraph, a table or a figure from one page.</p>
+  <figure>
+    <img src="img/01-cover.jpg" width="1440" height="900" loading="lazy" alt="The WeHPAH! cover page with a large search box, three search modes and links to browse the timeline, laws, people and organizations." />
+    <figcaption>The cover. The search box, the three search modes and the browse links are the only controls you need.</figcaption>
+  </figure>
+  <p>The cover has four parts:</p>
+  <ul>
+    <li>The <strong>search box</strong>, where you type your question or words.</li>
+    <li>Three <strong>search modes</strong>: <em>Find Exact Words</em>, <em>Explore Concepts</em> and <em>Ask the Dossier</em>. The sentence under the buttons explains the mode you chose.</li>
+    <li>The <strong>dossier menu</strong>, which switches to another collection.</li>
+    <li>The <strong>browse links</strong>, which list every date, law, person and organization in the dossier.</li>
+  </ul>
+  <p>To switch dossiers, click the dossier name under the mode buttons. Pick a dossier from the list, or paste the link of a public Hugging Face dataset that someone prepared for WeHPAH!. For this tutorial, keep the <em>Microsoft Datacenter Dossier</em>.</p>
+  <figure>
+    <img src="img/02-dossier-picker.jpg" width="1440" height="900" loading="lazy" alt="The dossier menu is open. It offers a field for a Hugging Face dataset link and two dossiers: Microsoft Datacenter Dossier and Great Oaks Dossier." />
+    <figcaption>The dossier menu lists the published dossiers and accepts a dataset link.</figcaption>
+  </figure>
+
+  <h2 id="exact"><span class="step-no">Step 2</span>Find exact words</h2>
+  <p>Start with what you know. A city usually approves a large project after its Planning Commission makes a recommendation, so search for that phrase.</p>
+  <ol>
+    <li>Make sure <strong>1. Find Exact Words</strong> is selected.</li>
+    <li>Type <code>Planning Commission recommends approval</code> in the search box.</li>
+    <li>Press <kbd>Enter</kbd> or click <strong>Search</strong>.</li>
+  </ol>
+  <p>The cover folds into a slim bar, and the matching passages appear on the left. Each entry shows the document title, the page number, the passage text and, at the bottom, the document date and file name. The tag <em>Exact word match</em> confirms that the passage contains your words.</p>
+  <figure>
+    <img src="img/03-exact-results.jpg" width="1440" height="900" loading="lazy" alt="Three passages contain the phrase Planning Commission recommends approval. Each entry shows a document title, a page number and the tag Exact word match." />
+    <figcaption><a href="../#/search/exact/Planning%20Commission%20recommends%20approval">Open this search</a>. Three passages contain the phrase.</figcaption>
+  </figure>
+  <p>Exact search works best for names, case numbers, statute numbers, dates and quoted phrases. It ignores capital letters, but it does not find other spellings or synonyms. Use <a href="#concepts">Explore Concepts</a> when you do not know the exact wording.</p>
+
+  <h2 id="page"><span class="step-no">Step 3</span>Check the original page</h2>
+  <p>Click the title of the first result, <em>Legislation Details (With Text)</em>. The original PDF page opens on the right, and a gold box marks the passage.</p>
+  <figure>
+    <img src="img/04-exact-page.jpg" width="1440" height="900" loading="lazy" alt="The City of San José legislation page opens on the right. A gold box marks the line: Planning Commission recommends approval (7-0-0)." />
+    <figcaption>The gold box shows exactly where the passage sits on the page.</figcaption>
+  </figure>
+  <div class="found">
+    <p><strong>What we found.</strong> The City of San José record for 10/24/2017 lists a City Council item for the rezoning, the Special Use Permit and the Development Exception at 1657 Alviso-Milpitas Road. The permit allows six data center buildings and 14 generators. The item notes that the Planning Commission recommended approval by a vote of 7-0-0.</p>
+  </div>
+  <p>The bar above the page has these controls:</p>
+  <ul>
+    <li><strong>Prev</strong> and <strong>Next</strong> move through the pages of the document.</li>
+    <li><strong>Fit Width</strong> changes the zoom to fit width, 100% or 150%.</li>
+    <li><strong>Original PDF</strong> downloads the complete document.</li>
+  </ul>
+  <div class="note">
+    <p><strong>Always read the page.</strong> The date under a result comes from the document or its file. For this result, it reads 2026-11-06, which is the day someone printed the page from the city website. The page itself shows the real meeting date, 10/24/2017. Trust the page, not the label.</p>
+  </div>
+  <p>You also see underlined words inside the passages. Each underlined name, law or date is a link. Click one to see everything the dossier says about it. Step 7 and Step 9 show these pages.</p>
+
+  <h2 id="concepts"><span class="step-no">Step 4</span>Explore concepts</h2>
+  <p>The 2017 city approval is not the end of the story. Many later documents come from the California Energy Commission. To find out why, describe the question in your own words.</p>
+  <ol>
+    <li>Click <strong>2. Explore Concepts</strong>.</li>
+    <li>Type <code>why the backup generators need an exemption from the Energy Commission</code>.</li>
+    <li>Press <kbd>Enter</kbd>.</li>
+  </ol>
+  <p>The first concept search takes a little longer, because your browser prepares the search on your own computer. Later searches are faster.</p>
+  <p>Concept search finds passages with a similar meaning, even when they use different words. The tag tells you how close each passage is: <em>Strong conceptual match</em> or <em>Related context</em>. Click the first title to open its page.</p>
+  <figure>
+    <img src="img/05-concepts.jpg" width="1440" height="900" loading="lazy" alt="Concept search results on the left. On the right, page 8 of the Commission Final Decision opens with a gold box around the explanation of the Small Power Plant Exemption." />
+    <figcaption><a href="../#/search/concepts/why%20the%20backup%20generators%20need%20an%20exemption%20from%20the%20Energy%20Commission">Open this search</a>. The Commission Final Decision explains the exemption on page 8.</figcaption>
+  </figure>
+  <div class="found">
+    <p><strong>What we found.</strong> The data center's backup generators can produce up to 99 MW. The Warren-Alquist Act gives the Energy Commission sole authority to approve or deny any thermal power plant of 50 MW or more. Public Resources Code section 25541 creates an exception for plants up to 100 MW, called a <em>Small Power Plant Exemption</em> (SPPE). Microsoft applied for this exemption. To grant it, the Commission must find that the project will not cause substantial harm to energy resources or the environment.</p>
+  </div>
+
+  <h2 id="timeline"><span class="step-no">Step 5</span>Put your results in order</h2>
+  <p>Above the results, a row of tabs reads <strong>Passages · Timeline · Laws cited · People · Organizations</strong>. These tabs show the same results in another form. Click <strong>Timeline</strong> to list every date in your results, from the oldest to the newest.</p>
+  <figure>
+    <img src="img/06-results-timeline.jpg" width="1440" height="900" loading="lazy" alt="The Timeline tab lists dates from the concept search: November 15, 2019, December 17, 2019 and July 13, 2022, each with its sentence and page." />
+    <figcaption>The timeline quotes each date exactly as the document writes it.</figcaption>
+  </figure>
+  <div class="found">
+    <p><strong>What we found.</strong> Microsoft submitted the exemption application on November 15, 2019. On December 17, 2019, the Commission appointed a committee to preside over it. The adoption order became final on July 13, 2022.</p>
+  </div>
+  <p>Use the <strong>filter box</strong> above the tabs to narrow any list by a word, a name or a year. Click <strong>← Results</strong> to go back to the passages.</p>
+
+  <h2 id="ask"><span class="step-no">Step 6</span>Ask the dossier a question</h2>
+  <p><strong>3. Ask the Dossier</strong> answers a direct question with sentences taken word for word from the documents. This mode is <em>experimental</em>, and the site says so in a gold label. Treat every answer as a lead and check its source.</p>
+  <ol>
+    <li>Click <strong>3. Ask the Dossier</strong>.</li>
+    <li>Type <code>When did the Energy Commission grant the Small Power Plant Exemption?</code></li>
+    <li>Press <kbd>Enter</kbd>.</li>
+  </ol>
+  <p>A white panel lists numbered answers. Under each answer, a gold <strong>verify</strong> button names the document and page. Point to the button to read the exact quotation. Click it to open the page with the passage marked.</p>
+  <figure>
+    <img src="img/07-ask.jpg" width="1440" height="900" loading="lazy" alt="The Ask the Dossier panel lists dated answers, each with a verify button. The first answer opens the Memo re Close Docket, where a gold box marks the sentence about July 13, 2022." />
+    <figcaption><a href="../#/search/dossier/When%20did%20the%20Energy%20Commission%20grant%20the%20Small%20Power%20Plant%20Exemption%3F">Open this question</a>. The first verify button opens the memo that closed the case.</figcaption>
+  </figure>
+  <div class="found">
+    <p><strong>What we found.</strong> A memo from Hearing Officer Deborah Dyer, dated September 15, 2022, asks to close Docket 19-SPPE-04. It states that the Commission granted the exemption on July 13, 2022.</p>
+  </div>
+  <div class="note">
+    <p><strong>How the answers stay honest.</strong> WeHPAH! shows an answer only when its quotation appears word for word in the cited passage. It drops any sentence that it cannot match. When documents disagree, it lists each version. You still need to read the page, because a sentence can be accurate and still lack context.</p>
+  </div>
+
+  <h2 id="date"><span class="step-no">Step 7</span>Open everything about one day</h2>
+  <p>Click any underlined date, such as <em>July 13, 2022</em>, to open a page for that day. The page counts the passages and documents that mention the date, and it lists the people, organizations and laws named in those passages. The passages follow below.</p>
+  <figure>
+    <img src="img/08-date.jpg" width="1440" height="900" loading="lazy" alt="The page for July 13, 2022 shows 20 passages in 8 documents, the organizations named with them, and passages about the Commission business meeting on that day." />
+    <figcaption><a href="../#/date/2022-07-13">Open July 13, 2022</a>. The passages describe the Commission business meeting on that day.</figcaption>
+  </figure>
+  <p>The numbers next to each name count shared passages. A shared passage only means that two things appear together. It does not prove a relationship, so read the passages before you draw a conclusion.</p>
+  <p>To see every date in the dossier, click <strong>Timeline</strong> on the cover.</p>
+
+  <h2 id="laws"><span class="step-no">Step 8</span>Browse the laws and cases cited</h2>
+  <p>On the cover, click <strong>Laws &amp; cases cited</strong>. WeHPAH! lists every law, regulation and court case that the documents cite, with the number of citations and documents. Click a law or one of its sections to read every passage that cites it.</p>
+  <figure>
+    <img src="img/09-laws.jpg" width="1440" height="900" loading="lazy" alt="The list of laws and cases cited. The California Environmental Quality Act leads with 1,821 citations in 122 documents, followed by the CEQA Guidelines and the California Public Resources Code." />
+    <figcaption><a href="../#/laws">Open the list of laws</a>. Each gold section number opens its passages.</figcaption>
+  </figure>
+  <div class="found">
+    <p><strong>What we found.</strong> The California Environmental Quality Act (CEQA) is the most cited law, with 1,821 citations in 122 documents. Environmental review drove most of this record: the Commission had to prepare an Environmental Impact Report before it could grant the exemption.</p>
+  </div>
+
+  <h2 id="people"><span class="step-no">Step 9</span>Follow a person or an organization</h2>
+  <p>On the cover, click <strong>People</strong> or <strong>Organizations</strong>. The lists put the most frequently named first. Each entry shows its role when the documents state one, such as <em>the applicant</em> or <em>the petitioner</em>. Click a name to open its page.</p>
+  <figure>
+    <img src="img/10-organization.jpg" width="1440" height="900" loading="lazy" alt="The page for California Unions for Reliable Energy shows 144 passages in 31 documents dated January 2020 to August 2022, with the people, organizations, laws and dates named alongside it." />
+    <figcaption><a href="../#/name/California%20Unions%20for%20Reliable%20Energy">Open California Unions for Reliable Energy</a>.</figcaption>
+  </figure>
+  <div class="found">
+    <p><strong>What we found.</strong> California Unions for Reliable Energy (CURE) petitioned to join the case as a party on January 23, 2020. Its name appears in 31 documents between January 2020 and August 2022. A later filing reports that CURE filed no comments on the Environmental Impact Report and was no longer participating.</p>
+  </div>
+
+  <h2 id="share"><span class="step-no">Step 10</span>Share what you found</h2>
+  <p>Every view has its own web address. Copy the address from your browser to share a search, a date, a law or a name with a colleague. They see the same view when they open the link. The links in this tutorial work the same way.</p>
+  <p>A few more tips:</p>
+  <ul>
+    <li>Click the <strong>arrow button</strong> at the right of the slim bar, or press <kbd>Esc</kbd> in the search box, to bring back the full cover.</li>
+    <li>Click <strong>WeHPAH!</strong> at the top left to start over.</li>
+    <li>Use your browser's <strong>Back</strong> button to return to the previous view.</li>
+    <li>Click <strong>Original PDF</strong> to keep a copy of a source document for your files.</li>
+  </ul>
+
+  <h2 id="story">What the record shows</h2>
+  <p>The steps above trace the planning process in two stages. First, the City of San José rezoned the land and issued a Special Use Permit. Second, the California Energy Commission reviewed the backup generators, prepared an Environmental Impact Report and granted the exemption. Each row links to its source in WeHPAH!, so you can check every date.</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Date</th><th>Event</th></tr></thead>
+      <tbody>
+        <tr><td>Oct 11, 2017</td><td>The San José Planning Commission holds a hearing on the 237 Industrial Center project and recommends approval, 7-0-0. <a href="../#/search/exact/Planning%20Commission%20recommends%20approval">Source</a></td></tr>
+        <tr><td>Oct 24, 2017</td><td>The City Council takes up the rezoning, the Special Use Permit and the Development Exception for 1657 Alviso-Milpitas Road. <a href="../#/search/exact/1657%20Alviso-Milpitas%20Road">Source</a></td></tr>
+        <tr><td>Nov 15, 2019</td><td>Microsoft applies to the Energy Commission for a Small Power Plant Exemption (Docket 19-SPPE-04). <a href="../#/date/2019-11-15">Source</a></td></tr>
+        <tr><td>Dec 17, 2019</td><td>The Commission appoints a committee to preside over the application. <a href="../#/date/2019-12-17">Source</a></td></tr>
+        <tr><td>Jan 23, 2020</td><td>California Unions for Reliable Energy petitions to intervene. <a href="../#/date/2020-01-23">Source</a></td></tr>
+        <tr><td>Feb 2021</td><td>Commission staff issue a Notice of Preparation and hold a public scoping meeting for an Environmental Impact Report. <a href="../#/search/exact/Notice%20of%20Preparation">Source</a></td></tr>
+        <tr><td>Dec 23, 2021</td><td>Staff publish the Draft Environmental Impact Report for public comment. <a href="../#/date/2021-12-23">Source</a></td></tr>
+        <tr><td>Feb 28, 2022</td><td>Staff file the Final Environmental Impact Report and responses to comments. <a href="../#/date/2022-02-28">Source</a></td></tr>
+        <tr><td>May 26, 2022</td><td>The committee holds an evidentiary hearing. <a href="../#/date/2022-05-26">Source</a></td></tr>
+        <tr><td>Jul 1, 2022</td><td>The committee publishes its Proposed Decision. <a href="../#/date/2022-07-01">Source</a></td></tr>
+        <tr><td>Jul 13, 2022</td><td>The Commission grants the Small Power Plant Exemption. <a href="../#/date/2022-07-13">Source</a></td></tr>
+        <tr><td>Sep 15, 2022</td><td>The hearing officer asks to close the docket. <a href="../#/search/dossier/When%20did%20the%20Energy%20Commission%20grant%20the%20Small%20Power%20Plant%20Exemption%3F">Source</a></td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>Use this table as a starting point, not as a finding. Open each source, read the page and note the document and page number in your own work.</p>
+
+  <p class="back"><a href="../">← Open WeHPAH! and start searching</a></p>
+</main>
+</body>
+</html>

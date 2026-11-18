@@ -315,7 +315,7 @@ body.compact .masthead-kicker { display: none; }
 /* --- footnotes under the search --- */
 
 .search-footnotes {
-  max-height: 90px;
+  max-height: 200px;
   overflow: hidden;
   opacity: 1;
   display: flex;
@@ -1017,6 +1017,7 @@ mark.exact-hit {
   font: 500 12px/1.4 var(--font-mono); letter-spacing: .04em; text-transform: uppercase; color: var(--ink-2);
 }
 .browse-links button { margin-left: 10px; border-bottom: 1px solid var(--line-strong); }
+.browse-links a { color: var(--ink); text-decoration-color: var(--gold-deep); text-underline-offset: 3px; }
 .browse-links button:hover, .view-option:hover, .back-link:hover, .provision:hover { color: var(--ink); border-color: var(--gold-deep); }
 .view-switch { display: flex; gap: 16px; margin-top: 8px; }
 .view-option { border-bottom: 2px solid transparent; }

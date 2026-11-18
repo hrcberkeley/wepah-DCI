@@ -4,6 +4,8 @@ A browser-based legal dossier explorer. Search passages, open the cited PDF page
 
 The current Microsoft Datacenter Dossier contains 283 PDFs and 91,130 passages. The browser uses the public [Hugging Face dataset](https://huggingface.co/datasets/kolenyo/MS_Datacenter) by default.
 
+New to the site? The [step-by-step tutorial](https://hrcberkeley.github.io/wepah-DCI/tutorial/) ([source](tutorial/index.html)) teaches every tool by tracing how the San José data center was approved.
+
 ## Build or update a dossier
 
 Put the PDFs in `raw_pdfs/` and run:
