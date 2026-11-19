@@ -38,6 +38,7 @@ export function reset() {
   el.next.disabled = true;
   el.zoom.disabled = true;
   el.download.hidden = true;
+  document.dispatchEvent(new CustomEvent('stage:page', { detail: null }));
 }
 
 const el = {
@@ -213,6 +214,12 @@ export async function open({ docId, docTitle, pageNumber, bbox }) {
 async function gotoPage(pageNum, bbox) {
   const clamped = Math.min(Math.max(1, pageNum), currentPdf.numPages);
   await renderPage(clamped, bbox || null);
+  document.dispatchEvent(new CustomEvent('stage:page', { detail: current() }));
+}
+
+/** The open document and page, or null. */
+export function current() {
+  return currentPdf ? { docId: currentDocId, title: currentDocTitle, page: currentPageNum } : null;
 }
 
 function setStatusOnLoad() {

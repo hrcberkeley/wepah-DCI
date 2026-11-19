@@ -130,10 +130,13 @@ async function boot() {
   el.expand.addEventListener('click', () => { setCompact(false); el.input.focus(); });
   $('view-filter').addEventListener('input', applyFilter);
   $('home-link').addEventListener('click', (e) => { e.preventDefault(); go('#/'); });
+  $('browse-docs').addEventListener('click', () => go('#/documents'));
   $('browse-timeline').addEventListener('click', () => go('#/timeline'));
   $('browse-laws').addEventListener('click', () => go('#/laws'));
   $('browse-people').addEventListener('click', () => go('#/people'));
   $('browse-orgs').addEventListener('click', () => go('#/orgs'));
+  $('save-doc').addEventListener('click', toggleSaved);
+  document.addEventListener('stage:page', (e) => updateSaveButton(e.detail));
   document.querySelectorAll('.view-option').forEach((b) => b.addEventListener('click', () => {
     if (b.dataset.view === 'passages') { renderEvidenceCards(state.lastRows, state.mode, state.lastQuery); setView('passages'); }
     else browse(b.dataset.view, state.lastRows.map((r) => r.passage_id));
@@ -181,6 +184,7 @@ function route() {
   const along = ['name', 'law', 'date'].includes(t) && key ? { t, key, sub } : null;
   const [what, a, b] = w > 0 ? parts.slice(0, w) : parts;
   if (!what) return goHome();
+  if (what === 'documents') return showDocuments();
   if (['timeline', 'laws', 'people', 'orgs'].includes(what)) return browse(what, null);
   if (what === 'search' && MODES[a] && b) {
     if (state.mode !== a) setMode(a);
@@ -199,8 +203,10 @@ function submitSearch() {
 }
 
 function updateBrowseLinks() {
-  $('browse-links').hidden = !db.hasEntities();
+  for (const id of ['browse-timeline', 'browse-laws']) $(id).hidden = !db.hasEntities();
   for (const id of ['browse-people', 'browse-orgs']) $(id).hidden = !db.hasNames();
+  const n = savedDocs().length;
+  $('browse-docs').textContent = n ? `All documents · ${n} saved` : 'All documents';
   document.querySelectorAll('.view-option[data-view="people"], .view-option[data-view="orgs"]').forEach((b) => { b.hidden = !db.hasNames(); });
 }
 
@@ -484,6 +490,99 @@ function openGrounding(row) {
     console.error(err);
     setStatus('The original page could not be opened.', false);
   });
+}
+
+// ---------- Saved documents (this browser only) & the list of all documents ----------
+// Saved per dossier in localStorage: [{ docId, title, page, savedAt }]. A saved document
+// follows the reader: turning pages updates where it reopens.
+const savedKey = () => `wehpah:saved:${db.currentRepository() || 'local'}`;
+
+function savedDocs() {
+  try { return JSON.parse(localStorage.getItem(savedKey())) || []; } catch { return []; }
+}
+
+function writeSaved(list) {
+  try { localStorage.setItem(savedKey(), JSON.stringify(list)); } catch { setStatus('This browser is not keeping saved documents (private window?).'); }
+  updateBrowseLinks();
+}
+
+function updateSaveButton(cur) {
+  const b = $('save-doc');
+  b.hidden = !cur;
+  if (!cur) return;
+  const list = savedDocs();
+  const hit = list.find((d) => d.docId === cur.docId);
+  if (hit && hit.page !== cur.page) { hit.page = cur.page; writeSaved(list); }
+  b.textContent = hit ? 'Saved ✓' : 'Save';
+  b.setAttribute('aria-pressed', String(!!hit));
+}
+
+function toggleSaved() {
+  const cur = pdfStage.current();
+  if (!cur) return;
+  const list = savedDocs();
+  const at = list.findIndex((d) => d.docId === cur.docId);
+  if (at >= 0) list.splice(at, 1);
+  else list.unshift({ docId: cur.docId, title: cur.title, page: cur.page, savedAt: new Date().toISOString().slice(0, 10) });
+  writeSaved(list);
+  updateSaveButton(cur);
+  setStatus(at >= 0 ? 'Removed from saved documents.' : 'Saved in this browser — find it under “All documents” on the cover.');
+}
+
+function docEntry(doc, idx, meta) {
+  const card = document.createElement('article');
+  card.className = 'entry';
+  card.style.setProperty('--i', Math.min(idx, 20));
+  card.innerHTML = `
+    <header class="entry-head"><h3 class="entry-doc" title="${escapeHtml(doc.title)}">${escapeHtml(doc.title)}</h3>
+      <span class="entry-page">p. ${doc.page}</span></header>
+    <p class="entry-meta">${escapeHtml(meta)}</p>`;
+  card.addEventListener('click', () => {
+    if (state.activeCard) state.activeCard.classList.remove('active');
+    state.activeCard = card;
+    card.classList.add('active');
+    pdfStage.open({ docId: doc.docId, docTitle: doc.title, pageNumber: doc.page })
+      .catch((err) => { console.error(err); setStatus('The original page could not be opened.', false); });
+  });
+  return card;
+}
+
+async function showDocuments() {
+  if (state.searching || !db.isReady()) return;
+  state.searching = true;
+  setCompact(true);
+  el.summary.hidden = true;
+  setView(null);
+  renderStreamLoading();
+  setStatus('Listing the documents…', true);
+  try {
+    const docs = await db.documents();
+    const saved = savedDocs();
+    el.count.hidden = false;
+    el.count.innerHTML = `<b>${docs.length} documents</b> · whole dossier`;
+    backLink(false);
+    el.stream.innerHTML = '';
+    const heading = (text) => {
+      const h = document.createElement('h3');
+      h.className = 'year-rule';
+      h.textContent = text;
+      el.stream.appendChild(h);
+    };
+    if (saved.length) {
+      heading('Saved in this browser');
+      saved.forEach((d, i) => el.stream.appendChild(docEntry(d, i, `saved ${d.savedAt} · ${d.docId}.pdf`)));
+      heading('All documents');
+    }
+    docs.forEach((d, i) => el.stream.appendChild(docEntry(
+      { docId: d.doc_id, title: d.doc_title, page: 1 }, i,
+      `${d.doc_date} · ${Number(d.pages)} page${Number(d.pages) === 1 ? '' : 's'} · ${d.doc_id}.pdf`)));
+    enableFilter('Filter by title, date or file name…');
+    setStatus('Click a document to open its first page — or a saved one where you left it.', false);
+  } catch (err) {
+    console.error(err);
+    renderStreamError();
+    setStatus('The document list could not be opened. Please try again.', false);
+  } finally { state.searching = false; }
 }
 
 // ---------- Timeline & laws cited ----------

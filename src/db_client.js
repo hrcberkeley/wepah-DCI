@@ -581,6 +581,15 @@ export async function dateMentions(date, limit = 300, along = null) {
     ) WHERE rn = 1 ORDER BY shared DESC, doc_id, page_number, passage_id LIMIT ${Math.trunc(limit)};`)), along);
 }
 
+/** Every document in the dossier, oldest first, with its page and passage counts. */
+export async function documents() {
+  const file = await corpusFile();
+  return rowsToObjects(await runQuery(`
+    SELECT doc_id, any_value(doc_title) AS doc_title, any_value(doc_date) AS doc_date,
+           max(page_number) AS pages, count(*) AS passages
+    FROM read_parquet('${file}') GROUP BY doc_id ORDER BY doc_date, doc_title;`));
+}
+
 // ---------- helpers ----------
 /** Escape a JS string as a DuckDB string literal. */
 function sqlString(s) {
